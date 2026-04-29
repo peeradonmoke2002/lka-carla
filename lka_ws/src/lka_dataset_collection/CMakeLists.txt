@@ -28,6 +28,8 @@ ament_python_install_package(${PROJECT_NAME})
 # Install Python executables
 install(PROGRAMS
   scripts/dummy_script.py
+  scripts/dataset_collector_node.py
+  scripts/save_sem_sample.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
