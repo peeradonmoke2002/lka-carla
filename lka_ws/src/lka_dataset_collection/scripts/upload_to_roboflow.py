@@ -4,8 +4,8 @@ import os, glob
 rf      = Roboflow(api_key="5KSltVzJaS7kDpK4fgC3")
 project = rf.workspace("peeradon-eueih").project("lka-ckden")
 
-img_dir = os.path.expanduser("~/lka_dataset/images/train")
-lbl_dir = os.path.expanduser("~/lka_dataset/labels/train")
+img_dir = os.path.expanduser("~/lka_dataset/images/val")
+lbl_dir = os.path.expanduser("~/lka_dataset/labels/val")
 
 for img_path in glob.glob(f"{img_dir}/*.jpg"):
     stem     = os.path.splitext(os.path.basename(img_path))[0]
