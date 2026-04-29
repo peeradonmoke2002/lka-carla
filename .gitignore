@@ -1,0 +1,34 @@
+# ROS2 build artifacts
+build/
+install/
+log/
+*.pyc
+__pycache__/
+
+# ROS2 workspace specific
+lka_ws/build/
+lka_ws/install/
+lka_ws/log/
+
+# YOLO training outputs
+training/runs/
+training/weights/
+
+# Dataset (large files)
+dataset/
+
+# Evaluation outputs
+evaluation/results/
+
+# Python
+*.egg-info/
+.eggs/
+dist/
+*.so
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store

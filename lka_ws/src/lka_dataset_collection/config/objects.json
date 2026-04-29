@@ -1,0 +1,70 @@
+{   
+    "objects": 
+    [
+        {
+            "type": "sensor.pseudo.objects",
+            "id": "objects"
+        },
+        {
+            "type": "sensor.pseudo.actor_list",
+            "id": "actor_list"
+        },
+        {
+            "type": "vehicle.tesla.model3",
+            "id": "ego_vehicle",
+            "spawn_point": {"x": 92.11, "y": -105.66, "z": 0.015, "roll": 0.0, "pitch": 0.0, "yaw": 90.0},
+            "sensors": [
+                {
+                    "type": "sensor.camera.rgb",
+                    "id": "CAM_FRONT",
+                    "spawn_point": {"x": 0.800, "y": 0.0, "z": 1.6, "roll": 0.0, "pitch": 0.0, "yaw": 0.0},
+                    "image_size_x": 1600,
+                    "image_size_y": 900,
+                    "fov": 70.0
+                },
+                {
+                    "type": "sensor.camera.rgb",
+                    "id": "CAM_VIEW",
+                    "spawn_point": {"x": -4.5, "y": 0.0, "z": 2.8, "roll": 0.0, "pitch": 20.0, "yaw": 0.0},
+                    "image_size_x": 800,
+                    "image_size_y": 600,
+                    "fov": 90.0
+                },
+                {
+                    "type": "sensor.camera.semantic_segmentation",
+                    "id": "semantic_segmentation_front",
+                    "spawn_point": {"x": 0.800, "y": 0.0, "z": 1.6, "roll": 0.0, "pitch": 0.0, "yaw": 0.0},
+                    "fov": 70.0,
+                    "image_size_x": 1600,
+                    "image_size_y": 900
+                },
+                {
+                    "type": "sensor.other.collision",
+                    "id": "collision",
+                    "spawn_point": {"x": 0.0, "y": 0.0, "z": 0.0}
+                },
+                {
+                    "type": "sensor.other.lane_invasion",
+                    "id": "lane_invasion",
+                    "spawn_point": {"x": 0.0, "y": 0.0, "z": 0.0}
+                },
+                {
+                    "type": "sensor.pseudo.objects",
+                    "id": "objects"
+                },
+                {
+                    "type": "sensor.pseudo.speedometer",
+                    "id": "speedometer"
+                },
+                {
+                    "type": "sensor.pseudo.odom",
+                    "id": "odometry"
+                },
+                {
+                    "type": "actor.pseudo.control",
+                    "id": "control"
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,4 @@
+[submodule "lka_ws/src/carla_ros"]
+	path = lka_ws/src/carla_ros
+	url = https://github.com/peeradonmoke2002/carla_ros.git
+	branch = lka
