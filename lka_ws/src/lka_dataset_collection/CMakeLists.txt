@@ -30,6 +30,7 @@ install(PROGRAMS
   scripts/dummy_script.py
   scripts/dataset_collector_node.py
   scripts/save_sem_sample.py
+  scripts/lane_detection_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

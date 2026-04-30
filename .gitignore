@@ -5,31 +5,14 @@ log/
 *.pyc
 __pycache__/
 
-# ROS2 workspace specific
-lka_ws/build/
-lka_ws/install/
-lka_ws/log/
-
-# YOLO training outputs
-training/runs/
-training/weights/
-
-# Dataset (large files)
-dataset/
-
-# Evaluation outputs
-evaluation/results/
-
-# Python
-*.egg-info/
-.eggs/
-dist/
-*.so
 
 # IDE
 .vscode/
 .idea/
 
-# OS
-.DS_Store
-Carla-Lane-Detection-Dataset-Generation/
+# dataset
+lka.yolo26/
+
+# model
+yolo26l-seg.pt
+lka_ws/src/lka_dataset_collection/scripts/runs/**
