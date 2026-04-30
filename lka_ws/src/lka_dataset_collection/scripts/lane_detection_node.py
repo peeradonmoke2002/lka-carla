@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 
-WEIGHTS = "/home/peeradon/lka-carla-yolo/lka_ws/src/lka_dataset_collection/scripts/runs/segment/training/runs/lka_seg_l5/weights/best.pt"
+WEIGHTS = "/home/peeradon/lka-carla-yolo/models/best_vision.pt"
 
 
 class LaneDetectionNode(Node):

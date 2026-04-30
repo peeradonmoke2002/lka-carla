@@ -42,13 +42,13 @@ def generate_launch_description():
     )
     fixed_delta_seconds = DeclareLaunchArgument(
         'fixed_delta_seconds',
-        default_value='0.0333' # 30 Hz
+        default_value='0.05' # 20 FPS
     )
-    max_real_delta_seconds = DeclareLaunchArgument(
-        'max_real_delta_seconds',
-        default_value='0.0333',
-        description='Max real time delta between ticks (seconds)'
-    )
+    # max_real_delta_seconds = DeclareLaunchArgument(
+    #     'max_real_delta_seconds',
+    #     default_value='0.0333',
+    #     description='Max real time delta between ticks (seconds)'
+    # )
     register_all_sensors = DeclareLaunchArgument(
         'register_all_sensors',
         default_value='True'
@@ -90,9 +90,9 @@ def generate_launch_description():
             {
                 'fixed_delta_seconds': LaunchConfiguration('fixed_delta_seconds')
             },
-            {
-                'max_real_delta_seconds': LaunchConfiguration('max_real_delta_seconds')
-            },
+            # {
+            #     'max_real_delta_seconds': LaunchConfiguration('max_real_delta_seconds')
+            # },
             {
                 'town': LaunchConfiguration('town')
             },
@@ -135,12 +135,12 @@ def generate_launch_description():
     ld.add_action(synchronous_mode)
     ld.add_action(synchronous_mode_wait_for_vehicle_control_command)
     ld.add_action(fixed_delta_seconds)
-    ld.add_action(max_real_delta_seconds)
+    # ld.add_action(max_real_delta_seconds)
     ld.add_action(town)
     ld.add_action(register_all_sensors)
     ld.add_action(ego_vehicle_role_name)
     ld.add_action(carla_bridge)
     ld.add_action(spawn_entity)
-    ld.add_action(manual_control)
+    # ld.add_action(manual_control)
 
     return ld
