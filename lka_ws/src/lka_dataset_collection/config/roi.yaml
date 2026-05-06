@@ -3,22 +3,22 @@ roi:
   image_w: 1600
   polygon:
   - !!python/tuple
-    - 217
-    - 898
+    - 102
+    - 892
   - !!python/tuple
-    - 780
+    - 764
     - 457
   - !!python/tuple
     - 825
-    - 457
+    - 456
   - !!python/tuple
     - 1465
-    - 897
-  x1: 217
-  x1_norm: 0.1356
+    - 894
+  x1: 102
+  x1_norm: 0.0638
   x2: 1465
   x2_norm: 0.9156
-  y1: 457
-  y1_norm: 0.5078
-  y2: 898
-  y2_norm: 0.9978
+  y1: 456
+  y1_norm: 0.5067
+  y2: 894
+  y2_norm: 0.9933

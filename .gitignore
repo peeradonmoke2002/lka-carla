@@ -14,5 +14,5 @@ __pycache__/
 lka.yolo26/
 
 # model
+models/
 yolo26l-seg.pt
-lka_ws/src/lka_dataset_collection/scripts/runs/**

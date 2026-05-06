@@ -17,8 +17,8 @@ import numpy as np
 import yaml
 import os
 
-IMAGE_PATH = '/home/peeradon/lka_dataset/sample_rgb.jpg'
-SEM_PATH   = '/home/peeradon/lka_dataset/sample_sem.jpg'
+IMAGE_PATH = '/home/peeradon/lka-carla-yolo/Images/sample_rgb.jpg'
+SEM_PATH   = '/home/peeradon/lka-carla-yolo/Images/sample_sem.jpg'
 OUT_YAML   = os.path.join(os.path.dirname(__file__), 'roi.yaml')
 
 SW_LOWER = np.array([227,  30, 238], dtype=np.uint8)
@@ -144,7 +144,7 @@ def main():
     pts_orig = [(int(x/scale), int(y/scale)) for x, y in points]
 
     preview, (x1,y1,x2,y2) = draw_preview(rgb, sem, pts_orig)
-    out_path = '/home/peeradon/lka_dataset/sample_roi_preview.jpg'
+    out_path = '/home/peeradon/lka-carla-yolo/Images/sample_roi_preview.jpg'
     cv2.imwrite(out_path, preview)
 
     # Resize preview to fit screen
