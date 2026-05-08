@@ -1,38 +1,27 @@
 """
 Record a ROS2 bag for perception evaluation.
+Records BOTH YOLO and Pure Vision topics simultaneously.
 Auto-cycles through 4 weather conditions at a fixed interval.
 
 Weather order: Rain (t=0) → Clear (t=D) → Fog (t=2D) → Night (t=3D)
-where D = weather_duration seconds (default 30)
+where D = weather_duration seconds (default 60)
 
 Usage:
-  ros2 launch lka_bringup record_bag.launch.py detection_method:=yolo
-  ros2 launch lka_bringup record_bag.launch.py detection_method:=pure_vision
-  ros2 launch lka_bringup record_bag.launch.py detection_method:=yolo weather_duration:=60
-  ros2 launch lka_bringup record_bag.launch.py detection_method:=yolo bag_path:=/tmp/my_bag
+  ros2 launch lka_bringup record_bag.launch.py
+  ros2 launch lka_bringup record_bag.launch.py bag_path:=/tmp/my_bag
 """
 
 import os
 from datetime import datetime
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction, LogInfo
-from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration
 
 
-# Raw camera excluded — too large (~120 MB/s). Debug image is sufficient.
-COMMON_TOPICS = [
+RECORD_TOPICS = [
     '/carla/weather_control',
-    '/lka/lane_center',
-]
-
-YOLO_EXTRA = [
-    '/lka/enhanced_image',
-    '/lka/detection_confidence',
-]
-
-PURE_VISION_EXTRA = [
-    '/lka/pure_vision_image',
+    '/lka/yolo/lane_center',
+    '/lka/pure_vision/lane_center',
 ]
 
 WEATHER_PRESETS = {
@@ -59,7 +48,7 @@ WEATHER_PRESETS = {
 }
 
 WEATHER_ORDER = ['rain', 'clear', 'fog', 'night']
-D = 30  # seconds per weather condition
+D = 60  # seconds per weather condition
 
 
 def pub_weather(name):
@@ -76,45 +65,21 @@ def pub_weather(name):
 
 def generate_launch_description():
     default_bag = os.path.join(
-        os.path.expanduser('~'),
-        'lka_bags',
+        '/home/peeradon/lka-carla-yolo/bags',
         datetime.now().strftime('%Y%m%d_%H%M%S'),
     )
 
-    detection_arg = DeclareLaunchArgument(
-        'detection_method', default_value='yolo',
-        description='yolo | pure_vision'
-    )
     bag_path_arg = DeclareLaunchArgument(
         'bag_path', default_value=default_bag,
         description='Output bag directory'
     )
-    duration_arg = DeclareLaunchArgument(
-        'weather_duration', default_value=str(D),
-        description='Seconds per weather condition (change D in file to apply)'
-    )
 
-    record_yolo = ExecuteProcess(
+    record = ExecuteProcess(
         cmd=[
             'ros2', 'bag', 'record',
             '--output', LaunchConfiguration('bag_path'),
             '--storage', 'sqlite3',
-        ] + COMMON_TOPICS + YOLO_EXTRA,
-        condition=IfCondition(
-            PythonExpression(["'", LaunchConfiguration('detection_method'), "' == 'yolo'"])
-        ),
-        output='screen',
-    )
-
-    record_pure_vision = ExecuteProcess(
-        cmd=[
-            'ros2', 'bag', 'record',
-            '--output', LaunchConfiguration('bag_path'),
-            '--storage', 'sqlite3',
-        ] + COMMON_TOPICS + PURE_VISION_EXTRA,
-        condition=IfCondition(
-            PythonExpression(["'", LaunchConfiguration('detection_method'), "' == 'pure_vision'"])
-        ),
+        ] + RECORD_TOPICS,
         output='screen',
     )
 
@@ -132,9 +97,6 @@ def generate_launch_description():
         )
 
     return LaunchDescription([
-        detection_arg,
         bag_path_arg,
-        duration_arg,
-        record_yolo,
-        record_pure_vision,
+        record,
     ] + weather_actions)

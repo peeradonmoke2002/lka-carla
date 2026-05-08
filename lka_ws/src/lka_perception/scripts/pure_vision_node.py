@@ -43,8 +43,6 @@ class PureVisionNode(Node):
         self.declare_parameter('confirm_frames', 3)
         self.declare_parameter('lost_frames', 5)
         self.declare_parameter('jump_thresh', 0.12)
-        self.declare_parameter('weather_fog_thresh', 40.0)
-        self.declare_parameter('weather_rain_thresh', 30.0)
         self.declare_parameter('hsv_lo_clear', [10,  30, 250])
         self.declare_parameter('hsv_hi_clear', [40, 120, 255])
         self.declare_parameter('hsv_lo_fog',   [10,   5, 180])
@@ -75,9 +73,7 @@ class PureVisionNode(Node):
         self.confirm_frames    = self.get_parameter('confirm_frames').value
         self.lost_frames       = self.get_parameter('lost_frames').value
         self.jump_thresh       = self.get_parameter('jump_thresh').value
-        self.fog_thresh        = self.get_parameter('weather_fog_thresh').value
-        self.rain_thresh       = self.get_parameter('weather_rain_thresh').value
-
+        
         def load_hsv(name):
             return np.array(self.get_parameter(name).value, dtype=np.uint8)
 
@@ -126,8 +122,9 @@ class PureVisionNode(Node):
             self.weather_callback,
             10,
         )
-        self.pub_center = self.create_publisher(LaneCenter, '/lka/lane_center', 10)
-        self.pub_image  = self.create_publisher(Image,      '/lka/pure_vision_image', 10)
+        self.pub_center       = self.create_publisher(LaneCenter, '/lka/lane_center',              10)
+        self.pub_center_debug = self.create_publisher(LaneCenter, '/lka/pure_vision/lane_center', 10)
+        self.pub_image        = self.create_publisher(Image,      '/lka/pure_vision_image',        10)
 
         self.get_logger().info(f'Pure vision node ready | roi: {roi_path}')
 
@@ -183,13 +180,13 @@ class PureVisionNode(Node):
     # ── Line fitting ───────────────────────────────────────────────────
 
     @staticmethod
-    def fit_line(points, y_bottom, y_top):
-        """Fit a line through (x,y) points. Returns (x_bottom, x_top, coeffs) or None."""
+    def fit_lane(points, y_bottom, y_top):
+        """Fit a line through (x,y) points. Returns (coeffs, y_top, y_bottom) or None."""
         if len(points) < 2:
             return None
         pts    = np.array(points)
         coeffs = np.polyfit(pts[:, 1], pts[:, 0], 1)
-        return int(np.polyval(coeffs, y_bottom)), int(np.polyval(coeffs, y_top)), coeffs
+        return coeffs, y_top, y_bottom
 
     def hough_fit(self, edge_img, y_bottom, y_top, slope_min, slope_max):
         """Run Hough on edge_img, keep lines within slope range, fit one line."""
@@ -208,15 +205,16 @@ class PureVisionNode(Node):
                 slope = (y2 - y1) / (x2 - x1)
                 if slope_min <= slope <= slope_max:
                     pts.extend([(x1, y1), (x2, y2)])
-        return self.fit_line(pts, y_bottom, y_top)
+        return self.fit_lane(pts, y_bottom, y_top)
 
     # ── Lane detection ─────────────────────────────────────────────────
 
-    def detect(self, img, weather):
+    def detect_lanes(self, img, weather):
         """Detect left and right lane lines and compute the normalized ego-lane center.
 
         Returns (left_fit, right_fit, center_norm, lx, rx, y_bottom, y_top, y_ref, both_sides).
         center_norm is None when detection fails. both_sides is True only when both lines found.
+        left_fit / right_fit = (coeffs, y_top, y_bot) or None.
         """
         h, w     = img.shape[:2]
         roi_mask = self.make_roi_mask(h, w)
@@ -233,31 +231,32 @@ class PureVisionNode(Node):
         right_fit = self.hough_fit(right_edges, y_bottom, y_top, self.right_slope_min, self.right_slope_max)
 
         # Sanity checks — discard lines that crossed to the wrong side
-        if left_fit and left_fit[0] > roi_cx:
+        if left_fit and int(np.polyval(left_fit[0], y_bottom)) > roi_cx:
             left_fit = None
-        if right_fit and right_fit[0] < roi_cx:
+        if right_fit and int(np.polyval(right_fit[0], y_bottom)) < roi_cx:
             right_fit = None
-        if left_fit and left_fit[1] > roi_cx * 1.1:
+        if left_fit and int(np.polyval(left_fit[0], y_top)) > roi_cx * 1.1:
             left_fit = None
-        if right_fit and right_fit[1] < roi_cx * 0.9:
+        if right_fit and int(np.polyval(right_fit[0], y_top)) < roi_cx * 0.9:
             right_fit = None
-        if left_fit and right_fit and left_fit[1] >= right_fit[1]:
+        if left_fit and right_fit and \
+                int(np.polyval(left_fit[0], y_top)) >= int(np.polyval(right_fit[0], y_top)):
             left_fit = None
 
         center_norm = lx = rx = None
         both_sides = False
 
         if left_fit and right_fit:
-            lx = int(np.polyval(left_fit[2],  y_ref))
-            rx = int(np.polyval(right_fit[2], y_ref))
+            lx = int(np.polyval(left_fit[0],  y_ref))
+            rx = int(np.polyval(right_fit[0], y_ref))
             center_norm = ((lx + rx) / 2.0) / w
             both_sides  = True
         elif left_fit:
-            lx = int(np.polyval(left_fit[2], y_ref))
+            lx = int(np.polyval(left_fit[0], y_ref))
             rx = lx + self.lane_width_px
             center_norm = ((lx + rx) / 2.0) / w
         elif right_fit:
-            rx = int(np.polyval(right_fit[2], y_ref))
+            rx = int(np.polyval(right_fit[0], y_ref))
             lx = rx - self.lane_width_px
             center_norm = ((lx + rx) / 2.0) / w
 
@@ -266,43 +265,53 @@ class PureVisionNode(Node):
     # ── Visualization ──────────────────────────────────────────────────
 
     @staticmethod
-    def draw_debug(img, weather, left_fit, right_fit, center_norm, lx, rx, y_bottom, y_top, y_ref):
+    def draw_lane_line(img, fit, color, label, label_offset_x):
         h, w = img.shape[:2]
-        vis  = img.copy()
+        coeffs, y_top, _ = fit
+        ys = np.linspace(y_top, h - 1, 60).astype(int)
+        xs = np.polyval(coeffs, ys).astype(int)
+        for i in range(len(ys) - 1):
+            if 0 <= xs[i] < w and 0 <= xs[i + 1] < w:
+                cv2.line(img, (xs[i], ys[i]), (xs[i + 1], ys[i + 1]), color, 3)
+        label_x = max(0, int(xs[-1]) + label_offset_x)
+        cv2.putText(img, label, (label_x, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
-        if left_fit and right_fit:
-            lane_poly = np.array([
-                [left_fit[1],  y_top],   [right_fit[1], y_top],
-                [right_fit[0], y_bottom], [left_fit[0],  y_bottom],
-            ], dtype=np.int32)
+    @staticmethod
+    def draw_debug(img, weather, left_fit, right_fit, center_norm, lx, rx, y_bottom, y_top, y_ref):
+        h, w   = img.shape[:2]
+        vis    = img.copy()
+        img_cx = w // 2
+
+        if left_fit is not None:
+            PureVisionNode.draw_lane_line(vis, left_fit,  (0, 255, 0),   'left_marking',  10)
+        if right_fit is not None:
+            PureVisionNode.draw_lane_line(vis, right_fit, (0, 255, 255), 'right_edge', -160)
+
+        if center_norm is None:
             overlay = vis.copy()
-            cv2.fillPoly(overlay, [lane_poly], (0, 180, 0))
-            vis = cv2.addWeighted(overlay, 0.25, vis, 0.75, 0)
+            cv2.rectangle(overlay, (0, 0), (w, 95), (0, 0, 180), -1)
+            cv2.addWeighted(overlay, 0.45, vis, 0.55, 0, vis)
+            cv2.putText(vis, '!! NO DETECTION !!', (10, 32),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+            cv2.putText(vis, f'weather: {weather}', (10, 58),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+            return vis
 
-        if left_fit:
-            cv2.line(vis, (left_fit[0], y_bottom), (left_fit[1], y_top), (0, 255, 0), 3)
-            cv2.putText(vis, 'left_marking', (left_fit[0] + 10, y_bottom - 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        cx            = int(center_norm * w)
+        lateral_error = cx - img_cx
+        err_color     = (0, 255, 0) if abs(lateral_error) < 50 else (0, 0, 255)
 
-        if right_fit:
-            cv2.line(vis, (right_fit[0], y_bottom), (right_fit[1], y_top), (0, 255, 255), 3)
-            cv2.putText(vis, 'right_edge', (right_fit[0] - 220, y_bottom - 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+        cv2.circle(vis, (cx, y_ref), 10, (0, 0, 255), -1)
+        cv2.line(vis, (img_cx, y_ref - 25), (img_cx, y_ref + 25), (255, 255, 0), 2)
+        cv2.arrowedLine(vis, (img_cx, y_ref), (cx, y_ref), (0, 255, 255), 2, tipLength=0.2)
 
-        if center_norm is not None and lx is not None and rx is not None:
-            cx  = int(center_norm * w)
-            err = (w / 2) - cx
-            cv2.line(vis, (lx, y_ref), (rx, y_ref), (180, 180, 0), 1)
-            cv2.circle(vis, (cx, y_ref), 14, (0, 0, 255), -1)
-            cv2.line(vis, (w // 2, y_ref - 25), (w // 2, y_ref + 25), (255, 255, 0), 2)
-            cv2.putText(vis, f'center={center_norm:.3f}  err={err:+.0f}px',
-                        (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
-        else:
-            cv2.putText(vis, 'NO DETECTION', (20, 50),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 2)
+        cv2.putText(vis, f'center: {center_norm:.3f}',        (10, 28),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(vis, f'error:  {lateral_error / w:+.3f}', (10, 54),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, err_color, 2)
+        cv2.putText(vis, f'weather: {weather}',               (10, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
-        cv2.putText(vis, f'weather: {weather}', (20, h - 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 200, 0), 2)
         return vis
 
     # ── Hysteresis ─────────────────────────────────────────────────────
@@ -355,9 +364,9 @@ class PureVisionNode(Node):
     # ── Callbacks ──────────────────────────────────────────────────────
 
     def weather_callback(self, msg: CarlaWeatherParameters):
-        if msg.fog_density > self.fog_thresh:
+        if msg.fog_density > 40.0:
             new_mode = 'fog'
-        elif msg.precipitation > self.rain_thresh:
+        elif msg.precipitation > 30.0:
             new_mode = 'rain'
         elif msg.sun_altitude_angle < 0:
             new_mode = 'night'
@@ -375,7 +384,7 @@ class PureVisionNode(Node):
         img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
         left_fit, right_fit, center_norm, lx, rx, y_bottom, y_top, y_ref, both_sides = \
-            self.detect(img, self.weather_mode)
+            self.detect_lanes(img, self.weather_mode)
 
         stable_center = self.stability_filter(center_norm, both_sides)
         detected      = stable_center is not None
@@ -386,7 +395,10 @@ class PureVisionNode(Node):
         lane_msg.center       = center_val
         lane_msg.confidence   = 0.0
         lane_msg.detected     = detected
+        lane_msg.lx           = float(lx) if lx is not None else -1.0
+        lane_msg.rx           = float(rx) if rx is not None else -1.0
         self.pub_center.publish(lane_msg)
+        self.pub_center_debug.publish(lane_msg)
 
         vis = self.draw_debug(img, self.weather_mode, left_fit, right_fit,
                               stable_center, lx, rx, y_bottom, y_top, y_ref)

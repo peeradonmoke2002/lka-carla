@@ -48,8 +48,9 @@ class LaneDetectionNode(Node):
             self.weather_callback,
             10,
         )
-        self.pub_enhanced = self.create_publisher(Image,      "/lka/enhanced_image", 10)
-        self.pub_center   = self.create_publisher(LaneCenter, "/lka/lane_center", 10)
+        self.pub_enhanced = self.create_publisher(Image,      "/lka/enhanced_image",    10)
+        self.pub_center   = self.create_publisher(LaneCenter, "/lka/lane_center",       10)
+        self.pub_center_debug = self.create_publisher(LaneCenter, "/lka/yolo/lane_center", 10)
 
         self.get_logger().info(
             f"Lane detection node ready | weather: {self.weather_mode} | weights: {weights}"
@@ -201,13 +202,18 @@ class LaneDetectionNode(Node):
 
         detected    = center_px is not None
         center_norm = float(center_px / w) if detected else -1.0
+        lx_val = float(np.polyval(left_fit[0],  y_ref)) if left_fit  is not None else -1.0
+        rx_val = float(np.polyval(right_fit[0], y_ref)) if right_fit is not None else -1.0
 
         lane_msg              = LaneCenter()
         lane_msg.header.stamp = self.get_clock().now().to_msg()
         lane_msg.center       = center_norm
         lane_msg.confidence   = float(mean_conf)
         lane_msg.detected     = detected
+        lane_msg.lx           = lx_val
+        lane_msg.rx           = rx_val
         self.pub_center.publish(lane_msg)
+        self.pub_center_debug.publish(lane_msg)
 
         self.get_logger().info(
             f"[{self.weather_mode}] conf={mean_conf:.3f}  center={center_norm:.3f}",

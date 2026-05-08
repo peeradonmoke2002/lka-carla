@@ -22,10 +22,6 @@
     lost_frames: 5
     jump_thresh: 0.12
 
-    # Weather classification thresholds
-    weather_fog_thresh: 40.0
-    weather_rain_thresh: 30.0
-
     # HSV thresholds per weather [H, S, V]
     hsv_lo_clear: [10, 30, 250]
     hsv_hi_clear: [40, 120, 255]
