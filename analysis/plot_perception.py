@@ -373,8 +373,8 @@ def plot_compare_figure(raw, metrics, out_path):
     # ── Panel 6: lx_std / rx_std comparison (2 bars per method per weather)
     ax   = ax_stab
     w6   = bw / 2
-    _lx_shades = {'YOLO': '#C0392B', 'Pure Vision': '#1E8449', 'UFLD': '#6C3483'}
-    _rx_shades = {'YOLO': '#E74C3C', 'Pure Vision': '#2ECC71', 'UFLD': '#9B59B6'}
+    _lx_shades = {'YOLO': '#C0392B', 'Pure Vision': '#1E8449'}
+    _rx_shades = {'YOLO': '#E74C3C', 'Pure Vision': '#2ECC71'}
     n_bars  = 2 * n_m
     bar_w6  = 0.8 / n_bars
     base_off = -(n_bars - 1) / 2 * bar_w6
@@ -409,7 +409,7 @@ def main():
     print(f'Loaded {len(raw)} frames')
     print(metrics[['method', 'weather', 'det_rate_%', 'err_mean', 'fps']].to_string(index=False))
 
-    _fname = {'YOLO': 'eval_yolo.png', 'Pure Vision': 'eval_pure_vision.png', 'UFLD': 'eval_ufld.png'}
+    _fname = {'YOLO': 'eval_yolo.png', 'Pure Vision': 'eval_pure_vision.png'}
     for method in raw['method'].unique():
         if method in _fname:
             plot_method_figure(raw, metrics, method, data_dir / _fname[method])
