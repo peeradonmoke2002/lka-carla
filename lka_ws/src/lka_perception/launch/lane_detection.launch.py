@@ -2,16 +2,17 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from ament_index_python.packages import get_package_share_directory
+import os
 
 
 def generate_launch_description():
-    weights_arg = DeclareLaunchArgument(
-        'weights',
-        default_value='/home/peeradon/lka-carla-yolo/models/best_vision.pt',
-        description='Path to YOLOv26-seg weights (.pt)'
-    )
-    conf_arg = DeclareLaunchArgument(
-        'conf_threshold', default_value='0.25', description='YOLO confidence threshold'
+    pkg_dir = get_package_share_directory('lka_perception')
+
+    params_arg = DeclareLaunchArgument(
+        'params_file',
+        default_value=os.path.join(pkg_dir, 'config', 'lane_detection_params.yaml'),
+        description='Path to lane_detection_params.yaml',
     )
 
     lane_detection_node = Node(
@@ -20,14 +21,12 @@ def generate_launch_description():
         name='lane_detection_node',
         output='screen',
         parameters=[
+            LaunchConfiguration('params_file'),
             {'use_sim_time': True},
-            {'weights': LaunchConfiguration('weights')},
-            {'conf_threshold': LaunchConfiguration('conf_threshold')},
         ],
     )
 
     return LaunchDescription([
-        weights_arg,
-        conf_arg,
+        params_arg,
         lane_detection_node,
     ])

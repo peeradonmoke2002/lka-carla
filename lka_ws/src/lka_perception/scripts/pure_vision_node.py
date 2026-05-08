@@ -1,23 +1,9 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """
 Pure Vision Lane Detection Node
 
-Subscribes to /carla/ego_vehicle/CAM_FRONT/image and /carla/weather_control,
-detects lanes via HSV yellow (left) + grayscale Canny (right) + Hough, and
-publishes ego-lane center on the same topic as the YOLO node.
-
-Weather classification (from CarlaWeatherParameters):
-  fog_density > 40   → fog
-  precipitation > 30 → rain
-  sun_altitude < 0   → night
-  else               → clear
-
-Parameters:
-  roi_yaml  (string) – path to roi.yaml
-
-Published topics:
-  /lka/lane_center         std_msgs/Float32  – normalized x [0,1]; -1 = no detection
-  /lka/pure_vision_image   sensor_msgs/Image – annotated debug frame
+Detects lanes via HSV yellow (left) + grayscale Canny (right) + Hough lines,
+then publishes the ego-lane center. All parameters are loaded from a YAML file.
 """
 
 import os
@@ -25,8 +11,8 @@ import yaml
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import Float32
 from carla_msgs.msg import CarlaWeatherParameters
+from lka_msgs.msg import LaneCenter
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
@@ -36,57 +22,97 @@ DEFAULT_ROI_YAML = os.path.join(
     '..', '..', '..', 'lka_dataset_collection', 'config', 'roi.yaml'
 )
 
-# HSV yellow thresholds per weather (left marking)
-_HSV_LO = {
-    'clear': np.array([10,  30, 250]),
-    'fog':   np.array([10,   5, 180]),
-    'night': np.array([10, 150,  30]),
-    'rain':  np.array([15,  25, 150]),
-}
-_HSV_HI = {
-    'clear': np.array([40, 120, 255]),
-    'fog':   np.array([40, 120, 255]),
-    'night': np.array([35, 255, 255]),
-    'rain':  np.array([35, 255, 255]),
-}
-_GRAY_CANNY = {
-    'clear': (30, 90), 'fog': (20, 60), 'night': (20, 60), 'rain': (20, 60),
-}
-
-
-def _classify_weather(msg: CarlaWeatherParameters) -> str:
-    if msg.fog_density > 40:
-        return 'fog'
-    if msg.precipitation > 30:
-        return 'rain'
-    if msg.sun_altitude_angle < 0:
-        return 'night'
-    return 'clear'
-
 
 class PureVisionNode(Node):
     def __init__(self):
         super().__init__('pure_vision_node')
 
+        # ── Declare parameters ────────────────────────────────────────
         self.declare_parameter('roi_yaml', DEFAULT_ROI_YAML)
-        roi_path = self.get_parameter('roi_yaml').get_parameter_value().string_value
+        self.declare_parameter('roi_margin_ratio', 0.08)
+        self.declare_parameter('y_top_ratio', 0.55)
+        self.declare_parameter('y_ref_ratio', 0.85)
+        self.declare_parameter('lane_width_px', 760)
+        self.declare_parameter('hough_threshold', 15)
+        self.declare_parameter('hough_min_line_length', 20)
+        self.declare_parameter('hough_max_line_gap', 80)
+        self.declare_parameter('left_slope_min', -2.5)
+        self.declare_parameter('left_slope_max', -0.3)
+        self.declare_parameter('right_slope_min', 0.3)
+        self.declare_parameter('right_slope_max', 2.5)
+        self.declare_parameter('confirm_frames', 3)
+        self.declare_parameter('lost_frames', 5)
+        self.declare_parameter('jump_thresh', 0.12)
+        self.declare_parameter('weather_fog_thresh', 40.0)
+        self.declare_parameter('weather_rain_thresh', 30.0)
+        self.declare_parameter('hsv_lo_clear', [10,  30, 250])
+        self.declare_parameter('hsv_hi_clear', [40, 120, 255])
+        self.declare_parameter('hsv_lo_fog',   [10,   5, 180])
+        self.declare_parameter('hsv_hi_fog',   [40, 120, 255])
+        self.declare_parameter('hsv_lo_night', [10, 150,  30])
+        self.declare_parameter('hsv_hi_night', [35, 255, 255])
+        self.declare_parameter('hsv_lo_rain',  [15,  25, 150])
+        self.declare_parameter('hsv_hi_rain',  [35, 255, 255])
+        self.declare_parameter('canny_clear', [30, 90])
+        self.declare_parameter('canny_fog',   [20, 60])
+        self.declare_parameter('canny_night', [20, 60])
+        self.declare_parameter('canny_rain',  [20, 60])
 
-        self.roi_polygon  = self._load_roi(roi_path)
+        # ── Load parameters ───────────────────────────────────────────
+        roi_path = self.get_parameter('roi_yaml').value
+
+        self.roi_margin_ratio  = self.get_parameter('roi_margin_ratio').value
+        self.y_top_ratio       = self.get_parameter('y_top_ratio').value
+        self.y_ref_ratio       = self.get_parameter('y_ref_ratio').value
+        self.lane_width_px     = self.get_parameter('lane_width_px').value
+        self.hough_threshold   = self.get_parameter('hough_threshold').value
+        self.hough_min_line_len = self.get_parameter('hough_min_line_length').value
+        self.hough_max_line_gap = self.get_parameter('hough_max_line_gap').value
+        self.left_slope_min    = self.get_parameter('left_slope_min').value
+        self.left_slope_max    = self.get_parameter('left_slope_max').value
+        self.right_slope_min   = self.get_parameter('right_slope_min').value
+        self.right_slope_max   = self.get_parameter('right_slope_max').value
+        self.confirm_frames    = self.get_parameter('confirm_frames').value
+        self.lost_frames       = self.get_parameter('lost_frames').value
+        self.jump_thresh       = self.get_parameter('jump_thresh').value
+        self.fog_thresh        = self.get_parameter('weather_fog_thresh').value
+        self.rain_thresh       = self.get_parameter('weather_rain_thresh').value
+
+        def load_hsv(name):
+            return np.array(self.get_parameter(name).value, dtype=np.uint8)
+
+        def load_canny(name):
+            v = self.get_parameter(name).value
+            return (int(v[0]), int(v[1]))
+
+        self.hsv_lo = {
+            'clear': load_hsv('hsv_lo_clear'),
+            'fog':   load_hsv('hsv_lo_fog'),
+            'night': load_hsv('hsv_lo_night'),
+            'rain':  load_hsv('hsv_lo_rain'),
+        }
+        self.hsv_hi = {
+            'clear': load_hsv('hsv_hi_clear'),
+            'fog':   load_hsv('hsv_hi_fog'),
+            'night': load_hsv('hsv_hi_night'),
+            'rain':  load_hsv('hsv_hi_rain'),
+        }
+        self.gray_canny = {
+            'clear': load_canny('canny_clear'),
+            'fog':   load_canny('canny_fog'),
+            'night': load_canny('canny_night'),
+            'rain':  load_canny('canny_rain'),
+        }
+
+        self.roi_polygon  = self.load_roi(roi_path)
         self.bridge       = CvBridge()
         self.weather_mode = 'rain'
 
         # Hysteresis state machine
-        #   SEARCHING → TRACKING : need CONFIRM_FRAMES consecutive "good" frames
-        #   TRACKING  → SEARCHING: need LOST_FRAMES   consecutive "bad"  frames
-        # "good" = both sides detected, center jump < JUMP_THRESH
-        # "bad"  = MISS, single-side, or large jump
-        self._tracking      = False  # current state
-        self._good_streak   = 0      # consecutive good frames (used while SEARCHING)
-        self._bad_streak    = 0      # consecutive bad  frames (used while TRACKING)
-        self._prev_center   = None   # last published center (for jump check)
-        self._CONFIRM  = 3           # good frames needed to enter TRACKING
-        self._LOST     = 5           # bad  frames needed to exit  TRACKING
-        self._JUMP     = 0.12        # max center shift per frame to count as "good"
+        self.tracking    = False
+        self.good_streak = 0
+        self.bad_streak  = 0
+        self.prev_center = None
 
         self.create_subscription(
             Image,
@@ -100,15 +126,15 @@ class PureVisionNode(Node):
             self.weather_callback,
             10,
         )
-        self.pub_center = self.create_publisher(Float32, '/lka/lane_center', 10)
-        self.pub_image  = self.create_publisher(Image,   '/lka/pure_vision_image', 10)
+        self.pub_center = self.create_publisher(LaneCenter, '/lka/lane_center', 10)
+        self.pub_image  = self.create_publisher(Image,      '/lka/pure_vision_image', 10)
 
         self.get_logger().info(f'Pure vision node ready | roi: {roi_path}')
 
-    # ── ROI ────────────────────────────────────────────────────────────
+    # ── ROI helpers ────────────────────────────────────────────────────
 
     @staticmethod
-    def _load_roi(path):
+    def load_roi(path):
         if not os.path.exists(path):
             return None
         with open(path) as f:
@@ -118,7 +144,7 @@ class PureVisionNode(Node):
             return None
         return np.array([list(p) for p in raw], dtype=np.int32)
 
-    def _make_roi_mask(self, h, w):
+    def make_roi_mask(self, h, w):
         mask = np.zeros((h, w), dtype=np.uint8)
         if self.roi_polygon is not None:
             cv2.fillPoly(mask, [self.roi_polygon], 255)
@@ -126,20 +152,53 @@ class PureVisionNode(Node):
             mask[:] = 255
         return mask
 
-    # ── Detection ──────────────────────────────────────────────────────
+    def roi_center_x(self, w):
+        if self.roi_polygon is not None:
+            top2 = self.roi_polygon[self.roi_polygon[:, 1].argsort()][:2]
+            return int(top2[:, 0].mean())
+        return w // 2
+
+    # ── Edge detection ─────────────────────────────────────────────────
+
+    def build_edge_images(self, img, weather, roi_mask, roi_cx, margin):
+        """Build left (HSV yellow) and right (Canny gray) edge images."""
+        # Left: HSV yellow → dilate → mask to left half of ROI
+        hsv         = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        yellow_mask = cv2.inRange(hsv, self.hsv_lo[weather], self.hsv_hi[weather])
+        kernel      = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        left_edges  = cv2.dilate(yellow_mask, kernel, iterations=2)
+        left_edges  = cv2.bitwise_and(left_edges, roi_mask)
+        left_edges[:, roi_cx + margin:] = 0
+
+        # Right: grayscale Canny → mask to right half of ROI
+        gray        = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray_blur   = cv2.GaussianBlur(gray, (5, 5), 0)
+        canny_lo, canny_hi = self.gray_canny[weather]
+        right_edges = cv2.Canny(gray_blur, canny_lo, canny_hi)
+        right_edges = cv2.bitwise_and(right_edges, roi_mask)
+        right_edges[:, :roi_cx - margin] = 0
+
+        return left_edges, right_edges
+
+    # ── Line fitting ───────────────────────────────────────────────────
 
     @staticmethod
-    def _fit_line(points, y_bottom, y_top):
+    def fit_line(points, y_bottom, y_top):
+        """Fit a line through (x,y) points. Returns (x_bottom, x_top, coeffs) or None."""
         if len(points) < 2:
             return None
-        pts = np.array(points)
+        pts    = np.array(points)
         coeffs = np.polyfit(pts[:, 1], pts[:, 0], 1)
         return int(np.polyval(coeffs, y_bottom)), int(np.polyval(coeffs, y_top)), coeffs
 
-    @staticmethod
-    def _hough_fit(edge_img, y_bottom, y_top, slope_min, slope_max):
-        lines = cv2.HoughLinesP(edge_img, rho=1, theta=np.pi / 180,
-                                 threshold=15, minLineLength=20, maxLineGap=80)
+    def hough_fit(self, edge_img, y_bottom, y_top, slope_min, slope_max):
+        """Run Hough on edge_img, keep lines within slope range, fit one line."""
+        lines = cv2.HoughLinesP(
+            edge_img, rho=1, theta=np.pi / 180,
+            threshold=self.hough_threshold,
+            minLineLength=self.hough_min_line_len,
+            maxLineGap=self.hough_max_line_gap,
+        )
         pts = []
         if lines is not None:
             for seg in lines:
@@ -149,54 +208,45 @@ class PureVisionNode(Node):
                 slope = (y2 - y1) / (x2 - x1)
                 if slope_min <= slope <= slope_max:
                     pts.extend([(x1, y1), (x2, y2)])
-        return PureVisionNode._fit_line(pts, y_bottom, y_top)
+        return self.fit_line(pts, y_bottom, y_top)
 
-    def _roi_center_x(self, w):
-        """Midpoint of the ROI top edge — used as left/right split."""
-        if self.roi_polygon is not None:
-            top2 = self.roi_polygon[self.roi_polygon[:, 1].argsort()][:2]
-            return int(top2[:, 0].mean())
-        return w // 2
+    # ── Lane detection ─────────────────────────────────────────────────
 
     def detect(self, img, weather):
-        h, w = img.shape[:2]
-        roi_mask = self._make_roi_mask(h, w)
-        MARGIN   = int(w * 0.08)
-        roi_cx   = self._roi_center_x(w)
+        """Detect left and right lane lines and compute the normalized ego-lane center.
 
-        # Left: HSV yellow → dilate → left half of ROI
-        hsv         = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        yellow_mask = cv2.inRange(hsv, _HSV_LO[weather], _HSV_HI[weather])
-        kernel      = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        left_edges  = cv2.dilate(yellow_mask, kernel, iterations=2)
-        left_edges  = cv2.bitwise_and(left_edges, roi_mask)
-        left_edges[:, roi_cx + MARGIN:] = 0
+        Returns (left_fit, right_fit, center_norm, lx, rx, y_bottom, y_top, y_ref, both_sides).
+        center_norm is None when detection fails. both_sides is True only when both lines found.
+        """
+        h, w     = img.shape[:2]
+        roi_mask = self.make_roi_mask(h, w)
+        margin   = int(w * self.roi_margin_ratio)
+        roi_cx   = self.roi_center_x(w)
 
-        # Right: grayscale Canny → right half of ROI
-        gray        = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        gray_blur   = cv2.GaussianBlur(gray, (5, 5), 0)
-        glo, ghi    = _GRAY_CANNY[weather]
-        right_edges = cv2.Canny(gray_blur, glo, ghi)
-        right_edges = cv2.bitwise_and(right_edges, roi_mask)
-        right_edges[:, :roi_cx - MARGIN] = 0
+        left_edges, right_edges = self.build_edge_images(img, weather, roi_mask, roi_cx, margin)
 
         y_bottom = h - 1
-        y_top    = int(h * 0.55)
-        y_ref    = int(h * 0.85)
+        y_top    = int(h * self.y_top_ratio)
+        y_ref    = int(h * self.y_ref_ratio)
 
-        left_fit  = self._hough_fit(left_edges,  y_bottom, y_top, slope_min=-2.5, slope_max=-0.3)
-        right_fit = self._hough_fit(right_edges, y_bottom, y_top, slope_min= 0.3, slope_max= 2.5)
+        left_fit  = self.hough_fit(left_edges,  y_bottom, y_top, self.left_slope_min,  self.left_slope_max)
+        right_fit = self.hough_fit(right_edges, y_bottom, y_top, self.right_slope_min, self.right_slope_max)
 
-        # Sanity checks (use roi_cx as the left/right boundary)
-        if left_fit  and left_fit[0]  > roi_cx:         left_fit  = None
-        if right_fit and right_fit[0] < roi_cx:         right_fit = None
-        if left_fit  and left_fit[1]  > roi_cx * 1.1:   left_fit  = None
-        if right_fit and right_fit[1] < roi_cx * 0.9:   right_fit = None
+        # Sanity checks — discard lines that crossed to the wrong side
+        if left_fit and left_fit[0] > roi_cx:
+            left_fit = None
+        if right_fit and right_fit[0] < roi_cx:
+            right_fit = None
+        if left_fit and left_fit[1] > roi_cx * 1.1:
+            left_fit = None
+        if right_fit and right_fit[1] < roi_cx * 0.9:
+            right_fit = None
         if left_fit and right_fit and left_fit[1] >= right_fit[1]:
             left_fit = None
 
         center_norm = lx = rx = None
         both_sides = False
+
         if left_fit and right_fit:
             lx = int(np.polyval(left_fit[2],  y_ref))
             rx = int(np.polyval(right_fit[2], y_ref))
@@ -204,11 +254,11 @@ class PureVisionNode(Node):
             both_sides  = True
         elif left_fit:
             lx = int(np.polyval(left_fit[2], y_ref))
-            rx = lx + 760
+            rx = lx + self.lane_width_px
             center_norm = ((lx + rx) / 2.0) / w
         elif right_fit:
             rx = int(np.polyval(right_fit[2], y_ref))
-            lx = rx - 760
+            lx = rx - self.lane_width_px
             center_norm = ((lx + rx) / 2.0) / w
 
         return left_fit, right_fit, center_norm, lx, rx, y_bottom, y_top, y_ref, both_sides
@@ -216,16 +266,18 @@ class PureVisionNode(Node):
     # ── Visualization ──────────────────────────────────────────────────
 
     @staticmethod
-    def _draw(img, weather, left_fit, right_fit, center_norm, lx, rx, y_bottom, y_top, y_ref):
+    def draw_debug(img, weather, left_fit, right_fit, center_norm, lx, rx, y_bottom, y_top, y_ref):
         h, w = img.shape[:2]
         vis  = img.copy()
 
         if left_fit and right_fit:
-            poly = np.array([[left_fit[1], y_top],  [right_fit[1], y_top],
-                              [right_fit[0], y_bottom], [left_fit[0], y_bottom]], dtype=np.int32)
-            ov = vis.copy()
-            cv2.fillPoly(ov, [poly], (0, 180, 0))
-            vis = cv2.addWeighted(ov, 0.25, vis, 0.75, 0)
+            lane_poly = np.array([
+                [left_fit[1],  y_top],   [right_fit[1], y_top],
+                [right_fit[0], y_bottom], [left_fit[0],  y_bottom],
+            ], dtype=np.int32)
+            overlay = vis.copy()
+            cv2.fillPoly(overlay, [lane_poly], (0, 180, 0))
+            vis = cv2.addWeighted(overlay, 0.25, vis, 0.75, 0)
 
         if left_fit:
             cv2.line(vis, (left_fit[0], y_bottom), (left_fit[1], y_top), (0, 255, 0), 3)
@@ -238,11 +290,11 @@ class PureVisionNode(Node):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
 
         if center_norm is not None and lx is not None and rx is not None:
-            cx = int(center_norm * w)
+            cx  = int(center_norm * w)
+            err = (w / 2) - cx
             cv2.line(vis, (lx, y_ref), (rx, y_ref), (180, 180, 0), 1)
             cv2.circle(vis, (cx, y_ref), 14, (0, 0, 255), -1)
             cv2.line(vis, (w // 2, y_ref - 25), (w // 2, y_ref + 25), (255, 255, 0), 2)
-            err = (w / 2) - cx
             cv2.putText(vis, f'center={center_norm:.3f}  err={err:+.0f}px',
                         (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
         else:
@@ -253,10 +305,64 @@ class PureVisionNode(Node):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 200, 0), 2)
         return vis
 
+    # ── Hysteresis ─────────────────────────────────────────────────────
+
+    def is_good_detection(self, center_norm, both_sides):
+        """A frame is 'good' when both sides are detected and the center didn't jump."""
+        if center_norm is None or not both_sides:
+            return False
+        if self.prev_center is not None and abs(center_norm - self.prev_center) > self.jump_thresh:
+            return False
+        return True
+
+    def stability_filter(self, center_norm, both_sides):
+        """Hysteresis state machine: require several good frames before publishing,
+        and tolerate several bad frames before dropping back to searching."""
+        good = self.is_good_detection(center_norm, both_sides)
+
+        if not self.tracking:
+            if good:
+                self.good_streak += 1
+                self.prev_center  = center_norm
+                if self.good_streak >= self.confirm_frames:
+                    self.tracking    = True
+                    self.bad_streak  = 0
+                    self.get_logger().info('Hysteresis → TRACKING')
+            else:
+                self.good_streak = 0
+                self.prev_center = None
+            return None
+        else:
+            if good:
+                self.bad_streak  = 0
+                self.prev_center = center_norm
+                return center_norm
+            else:
+                self.bad_streak += 1
+                reason = 'MISS' if center_norm is None else \
+                         'single-side' if not both_sides else 'jump'
+                self.get_logger().warn(
+                    f'Bad frame ({reason}) bad_streak={self.bad_streak}/{self.lost_frames}',
+                    throttle_duration_sec=0.5,
+                )
+                if self.bad_streak >= self.lost_frames:
+                    self.tracking    = False
+                    self.good_streak = 0
+                    self.prev_center = None
+                    self.get_logger().info('Hysteresis → SEARCHING')
+                return self.prev_center
+
     # ── Callbacks ──────────────────────────────────────────────────────
 
     def weather_callback(self, msg: CarlaWeatherParameters):
-        new_mode = _classify_weather(msg)
+        if msg.fog_density > self.fog_thresh:
+            new_mode = 'fog'
+        elif msg.precipitation > self.rain_thresh:
+            new_mode = 'rain'
+        elif msg.sun_altitude_angle < 0:
+            new_mode = 'night'
+        else:
+            new_mode = 'clear'
         if new_mode != self.weather_mode:
             self.weather_mode = new_mode
             self.get_logger().info(
@@ -265,72 +371,33 @@ class PureVisionNode(Node):
                 f'sun={msg.sun_altitude_angle:.1f}°)'
             )
 
-    def _is_good(self, center_norm, both_sides):
-        """True if this frame counts as a good detection."""
-        if center_norm is None or not both_sides:
-            return False
-        if self._prev_center is not None and abs(center_norm - self._prev_center) > self._JUMP:
-            return False
-        return True
-
-    def _stability_filter(self, center_norm, both_sides):
-        """Hysteresis state machine. Returns accepted center or None."""
-        good = self._is_good(center_norm, both_sides)
-
-        if not self._tracking:
-            # ── SEARCHING ──────────────────────────────────────────────
-            if good:
-                self._good_streak += 1
-                self._prev_center  = center_norm
-                if self._good_streak >= self._CONFIRM:
-                    self._tracking    = True
-                    self._bad_streak  = 0
-                    self.get_logger().info('Hysteresis → TRACKING')
-            else:
-                self._good_streak = 0
-                self._prev_center = None
-            return None  # never publish while still searching
-
-        else:
-            # ── TRACKING ───────────────────────────────────────────────
-            if good:
-                self._bad_streak  = 0
-                self._prev_center = center_norm
-                return center_norm
-            else:
-                self._bad_streak += 1
-                reason = 'MISS' if center_norm is None else \
-                         'single-side' if not both_sides else 'jump'
-                self.get_logger().warn(
-                    f'Bad frame ({reason}) bad_streak={self._bad_streak}/{self._LOST}'
-                )
-                if self._bad_streak >= self._LOST:
-                    self._tracking    = False
-                    self._good_streak = 0
-                    self._prev_center = None
-                    self.get_logger().info('Hysteresis → SEARCHING')
-                # Hold last known center during grace period
-                return self._prev_center
-
     def image_callback(self, msg: Image):
         img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
-        left_fit, right_fit, center_norm, lx, rx, y_bottom, y_top, y_ref, both_sides = self.detect(img, self.weather_mode)
+        left_fit, right_fit, center_norm, lx, rx, y_bottom, y_top, y_ref, both_sides = \
+            self.detect(img, self.weather_mode)
 
-        stable_center = self._stability_filter(center_norm, both_sides)
-        center_val    = float(stable_center) if stable_center is not None else -1.0
-        self.pub_center.publish(Float32(data=center_val))
+        stable_center = self.stability_filter(center_norm, both_sides)
+        detected      = stable_center is not None
+        center_val    = float(stable_center) if detected else -1.0
 
-        # Pass stable_center to draw so NO DETECTION shows when rejected
-        vis = self._draw(img, self.weather_mode, left_fit, right_fit,
-                         stable_center, lx, rx, y_bottom, y_top, y_ref)
+        lane_msg              = LaneCenter()
+        lane_msg.header.stamp = self.get_clock().now().to_msg()
+        lane_msg.center       = center_val
+        lane_msg.confidence   = 0.0
+        lane_msg.detected     = detected
+        self.pub_center.publish(lane_msg)
+
+        vis = self.draw_debug(img, self.weather_mode, left_fit, right_fit,
+                              stable_center, lx, rx, y_bottom, y_top, y_ref)
         self.pub_image.publish(self.bridge.cv2_to_imgmsg(vis, encoding='bgr8'))
 
         raw_str = f'{center_norm:.3f}' if center_norm is not None else 'MISS'
         sides   = 'both' if both_sides else ('one' if center_norm is not None else 'none')
-        state   = 'TRACKING' if self._tracking else f'SEARCHING({self._good_streak}/{self._CONFIRM})'
+        state   = 'TRACKING' if self.tracking else f'SEARCHING({self.good_streak}/{self.confirm_frames})'
         self.get_logger().info(
-            f'[{self.weather_mode}] {state} raw={raw_str}({sides}) out={center_val:.3f}'
+            f'[{self.weather_mode}] {state} raw={raw_str}({sides}) out={center_val:.3f}',
+            throttle_duration_sec=1.0,
         )
 
 
