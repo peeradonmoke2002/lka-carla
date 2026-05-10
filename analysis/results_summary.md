@@ -83,6 +83,22 @@ FPS values are identical for both methods in this experiment because both were r
 
 ---
 
+## Evaluation Caveats
+
+### 1. "Lateral error" is not ground-truth accuracy
+`|center_norm − 0.5|` assumes the true ego-lane center projects to exactly the image midpoint every frame. This is only valid on perfectly straight road when the vehicle is lane-centered. On curves or during controller corrections the projected lane center *should* deviate from 0.5 — the metric then conflates **perception error** with **controller tracking error**. Both detectors report `center_mean ≈ 0.47`, a systematic ~0.03 left bias that reflects a real ego-position offset, not a detector bias. True accuracy requires ground-truth cross-track error from the CARLA map.
+
+### 2. Asymmetric post-processing — hysteresis vs. no filtering
+Pure Vision runs a hysteresis state machine (`confirm_frames=3`, `lost_frames=5`) that re-publishes the previous center during bad frames and synthesizes the missing side as `lx + 760 px` when only one marking is visible. YOLO returns an immediate miss the moment either side is absent — no smoothing, no fallback. Consequences:
+- **Detection rate (100% both)** counts different things: Pure Vision's rate includes "remembered" frames; YOLO's is the raw frame rate.
+- **center_std** is artificially compressed for Pure Vision by the fallback.
+- Despite this advantage, YOLO still wins on stability in 3/4 conditions.
+
+### 3. FPS is bag-replay speed, not inference cost
+Both nodes subscribe to the same recorded bag. FPS reflects camera publish rate, not processing latency. Real inference cost (YOLO GPU vs. Pure Vision CPU) requires per-frame `time.perf_counter()` timing around the model call.
+
+---
+
 ## Key Findings
 
 | Aspect | YOLO | Pure Vision |

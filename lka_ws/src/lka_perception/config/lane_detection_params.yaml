@@ -11,3 +11,4 @@
     min_pixels: 50
     y_top_ratio: 0.50
     y_ref_ratio: 0.85
+    lane_width_m: 4.0

@@ -1,0 +1,9 @@
+/**:
+  ros__parameters:
+    weights: "/home/peeradon/lka-carla-yolo/pytorch-auto-drive/checkpoints/resnet18_scnn_lka/model.pt"
+    input_w: 800
+    input_h: 288
+    y_ref_ratio: 0.85
+    prob_thresh: 0.3
+    lane_width_px: 760
+    lane_width_m: 4.0

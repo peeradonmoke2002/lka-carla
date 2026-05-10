@@ -13,6 +13,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 from carla_msgs.msg import CarlaWeatherParameters
 from lka_msgs.msg import LaneCenter
+from std_msgs.msg import Float64
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
@@ -33,6 +34,7 @@ class PureVisionNode(Node):
         self.declare_parameter('y_top_ratio', 0.55)
         self.declare_parameter('y_ref_ratio', 0.85)
         self.declare_parameter('lane_width_px', 760)
+        self.declare_parameter('lane_width_m', 4.0)  # Town01 driving lane width
         self.declare_parameter('hough_threshold', 15)
         self.declare_parameter('hough_min_line_length', 20)
         self.declare_parameter('hough_max_line_gap', 80)
@@ -63,6 +65,7 @@ class PureVisionNode(Node):
         self.y_top_ratio       = self.get_parameter('y_top_ratio').value
         self.y_ref_ratio       = self.get_parameter('y_ref_ratio').value
         self.lane_width_px     = self.get_parameter('lane_width_px').value
+        self.lane_width_m      = self.get_parameter('lane_width_m').value
         self.hough_threshold   = self.get_parameter('hough_threshold').value
         self.hough_min_line_len = self.get_parameter('hough_min_line_length').value
         self.hough_max_line_gap = self.get_parameter('hough_max_line_gap').value
@@ -103,6 +106,7 @@ class PureVisionNode(Node):
         self.roi_polygon  = self.load_roi(roi_path)
         self.bridge       = CvBridge()
         self.weather_mode = 'rain'
+        self._cte         = None   # latest GT cross-track error (m)
 
         # Hysteresis state machine
         self.tracking    = False
@@ -110,23 +114,20 @@ class PureVisionNode(Node):
         self.bad_streak  = 0
         self.prev_center = None
 
-        self.create_subscription(
-            Image,
-            '/carla/ego_vehicle/CAM_FRONT/image',
-            self.image_callback,
-            10,
-        )
-        self.create_subscription(
-            CarlaWeatherParameters,
-            '/carla/weather_control',
-            self.weather_callback,
-            10,
-        )
-        self.pub_center       = self.create_publisher(LaneCenter, '/lka/lane_center',              10)
+        self.create_subscription(Image, '/carla/ego_vehicle/CAM_FRONT/image', self.image_callback, 10)
+        self.create_subscription(CarlaWeatherParameters, '/carla/weather_control', self.weather_callback, 10)
+        self.create_subscription(Float64, '/lka/gt/cross_track_m', self._cte_cb, 10)
+
+        # self.pub_center       = self.create_publisher(LaneCenter, '/lka/lane_center',             10)
         self.pub_center_debug = self.create_publisher(LaneCenter, '/lka/pure_vision/lane_center', 10)
-        self.pub_image        = self.create_publisher(Image,      '/lka/pure_vision_image',        10)
+        self.pub_image        = self.create_publisher(Image,      '/lka/pure_vision_image',       10)
 
         self.get_logger().info(f'Pure vision node ready | roi: {roi_path}')
+
+    # ── GT callback ───────────────────────────────────────────────────
+
+    def _cte_cb(self, msg: Float64):
+        self._cte = msg.data
 
     # ── ROI helpers ────────────────────────────────────────────────────
 
@@ -276,16 +277,18 @@ class PureVisionNode(Node):
         label_x = max(0, int(xs[-1]) + label_offset_x)
         cv2.putText(img, label, (label_x, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
-    @staticmethod
-    def draw_debug(img, weather, left_fit, right_fit, center_norm, lx, rx, y_bottom, y_top, y_ref):
+    def draw_debug(self, img, weather, left_fit, right_fit, center_norm, lx, rx, y_bottom, y_top, y_ref):
         h, w   = img.shape[:2]
         vis    = img.copy()
         img_cx = w // 2
 
-        if left_fit is not None:
-            PureVisionNode.draw_lane_line(vis, left_fit,  (0, 255, 0),   'left_marking',  10)
-        if right_fit is not None:
-            PureVisionNode.draw_lane_line(vis, right_fit, (0, 255, 255), 'right_edge', -160)
+        if left_fit is not None and right_fit is not None:
+            common_y_top = max(left_fit[1], right_fit[1])
+            PureVisionNode.draw_lane_line(vis, (left_fit[0],  common_y_top, left_fit[2]),  (0, 255, 0),   'left_marking',  10)
+            PureVisionNode.draw_lane_line(vis, (right_fit[0], common_y_top, right_fit[2]), (0, 255, 255), 'right_edge', -160)
+        else:
+            if left_fit  is not None: PureVisionNode.draw_lane_line(vis, left_fit,  (0, 255, 0),   'left_marking',  10)
+            if right_fit is not None: PureVisionNode.draw_lane_line(vis, right_fit, (0, 255, 255), 'right_edge', -160)
 
         if center_norm is None:
             overlay = vis.copy()
@@ -297,17 +300,26 @@ class PureVisionNode(Node):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
             return vis
 
-        cx            = int(center_norm * w)
-        lateral_error = cx - img_cx
-        err_color     = (0, 255, 0) if abs(lateral_error) < 50 else (0, 0, 255)
+        cx = int(center_norm * w)
+
+        # Real GT error (when GT available), else fallback to image-centre error
+        if self._cte is not None:
+            true_center = 0.5 - (self._cte / self.lane_width_m)
+            real_error  = center_norm - true_center
+            error_label = f'GT err: {real_error:+.3f}'
+            err_color   = (0, 255, 0) if abs(real_error) < 0.05 else (0, 0, 255)
+        else:
+            real_error  = center_norm - 0.5
+            error_label = f'err:    {real_error:+.3f}  (no GT)'
+            err_color   = (0, 255, 0) if abs(cx - img_cx) < 50 else (0, 0, 255)
 
         cv2.circle(vis, (cx, y_ref), 10, (0, 0, 255), -1)
         cv2.line(vis, (img_cx, y_ref - 25), (img_cx, y_ref + 25), (255, 255, 0), 2)
         cv2.arrowedLine(vis, (img_cx, y_ref), (cx, y_ref), (0, 255, 255), 2, tipLength=0.2)
 
-        cv2.putText(vis, f'center: {center_norm:.3f}',        (10, 28),
+        cv2.putText(vis, f'PV     center: {center_norm:.3f}', (10, 28),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(vis, f'error:  {lateral_error / w:+.3f}', (10, 54),
+        cv2.putText(vis, error_label,                         (10, 54),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, err_color, 2)
         cv2.putText(vis, f'weather: {weather}',               (10, 80),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)

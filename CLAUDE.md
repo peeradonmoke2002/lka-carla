@@ -1,9 +1,11 @@
-# lka-carla-yolo
+# CLAUDE.md
+
+## lka-carla-yolo
 
 Vision-Based Lane Keeping Assist (LKA) using multiple detection methods on CARLA Simulator. KMUTT FIBO — Machine Vision course, student ID 67340700403.
 
 
-Always read and follow the best practices defined in:
+**Always read and follow the best practices defined in**:
 - henki_ros2_best_practices.md
 
 
@@ -62,7 +64,7 @@ cd lka_ws && colcon build --symlink-install && source install/setup.bash
 ros2 launch lka_perception pure_vision.launch.py
 
 # YOLO node only
-ros2 launch lka_perception lane_detection.launch.py
+ros2 launch lka_perception yolo.launch.py
 
 # Pure Pursuit controller
 ros2 launch lka_control lka_controller.launch.py

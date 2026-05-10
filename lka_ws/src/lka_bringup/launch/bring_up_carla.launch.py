@@ -1,11 +1,12 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, Shutdown
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
+                             Shutdown, RegisterEventHandler, GroupAction)
+from launch.event_handlers import OnProcessExit
+from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     pkg = "lka_bringup"
@@ -98,25 +99,28 @@ def generate_launch_description():
 
     )
 
-    spawn_entity = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory(pkg),
-                'launch', 'carla_spawn_vehicle.launch.py'
-            )
-        )
+    # carla_spawn_objects exits after spawning — use it as trigger
+    spawn_objects = Node(
+        package='carla_spawn_objects',
+        executable='carla_spawn_objects',
+        name='carla_spawn_objects',
+        output='screen',
+        emulate_tty=True,
+        parameters=[{
+            'objects_definition_file': os.path.join(
+                get_package_share_directory(pkg), 'config', 'objects.json'),
+            'spawn_point_ego_vehicle': 'None',
+            'spawn_sensors_only': False,
+        }],
     )
 
     manual_control = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory(
-                    'carla_manual_control'), 'carla_manual_control.launch.py')
-            ),
-            launch_arguments={
-                'role_name': 'ego_vehicle',
-            }.items()
+                'carla_manual_control'), 'carla_manual_control.launch.py')
+        ),
+        launch_arguments={'role_name': 'ego_vehicle'}.items()
     )
-
 
 
     ld = LaunchDescription()
@@ -131,7 +135,7 @@ def generate_launch_description():
     ld.add_action(register_all_sensors)
     ld.add_action(ego_vehicle_role_name)
     ld.add_action(carla_bridge)
-    ld.add_action(spawn_entity)
+    ld.add_action(spawn_objects)
     ld.add_action(manual_control)
 
     return ld

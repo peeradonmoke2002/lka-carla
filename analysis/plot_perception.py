@@ -20,7 +20,7 @@ from pathlib import Path
 
 WEATHER_ORDER = ['rain', 'clear', 'fog', 'night']
 W_COLORS      = {'rain': '#4C9BE8', 'clear': '#F5A623', 'fog': '#9B9B9B', 'night': '#2C3E50'}
-M_COLORS      = {'YOLO': '#E74C3C', 'Pure Vision': '#2ECC71'}
+M_COLORS      = {'YOLO': '#E74C3C', 'Pure Vision': '#2ECC71', 'SCNN': '#9B59B6'}
 BAR_WIDTH     = 0.35
 W_IMAGE       = 1600
 BG_COLORS     = {'rain': '#AED6F1', 'clear': '#FAD7A0', 'fog': '#D5DBDB', 'night': '#AEB6BF'}
@@ -29,6 +29,7 @@ W_TXT_CLR     = {'rain': '#1A5276', 'clear': '#784212', 'fog': '#424949', 'night
 TOPIC_MAP = {
     '/lka/yolo/lane_center':        'YOLO',
     '/lka/pure_vision/lane_center': 'Pure Vision',
+    '/lka/scnn/lane_center':        'SCNN',
     '/lka/lane_center':             'shared',
 }
 
@@ -169,7 +170,7 @@ def plot_method_figure(raw, metrics, method, out_path):
                     f'{val:.0f}%', ha='center', va='bottom', fontsize=9)
     ax.tick_params(axis='x', labelsize=8)
 
-    # ── Panel 5: Confidence (YOLO only) or FPS (Pure Vision / UFLD) ────────
+    # ── Panel 5: Confidence (YOLO only) or FPS (Pure Vision / SCNN) ────────
     ax = ax_c4
     if method == 'YOLO':
         conf_vals = []
@@ -225,7 +226,8 @@ def plot_method_figure(raw, metrics, method, out_path):
 
 def plot_compare_figure(raw, metrics, out_path):
     W       = W_IMAGE
-    methods = ['YOLO', 'Pure Vision']
+    _order  = ['YOLO', 'Pure Vision', 'SCNN']
+    methods = [m for m in _order if m in raw['method'].unique()]
 
     # Align both methods to a common time axis (YOLO as reference)
     t0  = raw['timestamp_ns'].min()
@@ -409,7 +411,11 @@ def main():
     print(f'Loaded {len(raw)} frames')
     print(metrics[['method', 'weather', 'det_rate_%', 'err_mean', 'fps']].to_string(index=False))
 
-    _fname = {'YOLO': 'eval_yolo.png', 'Pure Vision': 'eval_pure_vision.png'}
+    _fname = {
+        'YOLO':        'eval_yolo.png',
+        'Pure Vision': 'eval_pure_vision.png',
+        'SCNN':        'eval_scnn.png',
+    }
     for method in raw['method'].unique():
         if method in _fname:
             plot_method_figure(raw, metrics, method, data_dir / _fname[method])

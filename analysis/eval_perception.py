@@ -57,7 +57,8 @@ def read_bag(bag_path: str):
 
         elif topic in ('/lka/lane_center',
                        '/lka/yolo/lane_center',
-                       '/lka/pure_vision/lane_center'):
+                       '/lka/pure_vision/lane_center',
+                       '/lka/scnn/lane_center'):
             msg = deserialize_message(data, LaneCenterMsg)
             lane_records.append({
                 'timestamp_ns': timestamp,
@@ -95,6 +96,7 @@ TOPIC_LABELS = {
     '/lka/lane_center':             'shared',
     '/lka/yolo/lane_center':        'YOLO',
     '/lka/pure_vision/lane_center': 'Pure Vision',
+    '/lka/scnn/lane_center':        'SCNN',
 }
 
 
@@ -118,23 +120,31 @@ def compute_metrics(lane_df):
             rx_vals    = valid[valid['rx'] > 0]['rx'].values
             lane_widths = valid[(valid['lx'] > 0) & (valid['rx'] > 0)].eval('rx - lx').values
             duration_s = (w['timestamp_ns'].max() - w['timestamp_ns'].min()) / 1e9
+            # first-difference std: frame-to-frame jitter proxy, independent of road curvature
+            center_diff_std = round(float(np.std(np.diff(centers))), 4) if len(centers) > 1 else np.nan
+            lx_diff_std     = round(float(np.std(np.diff(lx_vals))), 2) if len(lx_vals)  > 1 else np.nan
+            rx_diff_std     = round(float(np.std(np.diff(rx_vals))), 2) if len(rx_vals)  > 1 else np.nan
+
             rows.append({
-                'method':        method,
-                'weather':       weather,
-                'total_frames':  total,
-                'detected':      n_det,
-                'det_rate_%':    round(n_det / total * 100, 2),
-                'center_mean':   round(float(np.mean(centers)),     4) if len(centers)     else np.nan,
-                'center_std':    round(float(np.std(centers)),      4) if len(centers)     else np.nan,
-                'err_mean':      round(float(np.mean(lat_err)),     4) if len(lat_err)     else np.nan,
-                'err_std':       round(float(np.std(lat_err)),      4) if len(lat_err)     else np.nan,
-                'lx_mean':       round(float(np.mean(lx_vals)),     2) if len(lx_vals)     else np.nan,
-                'lx_std':        round(float(np.std(lx_vals)),      2) if len(lx_vals)     else np.nan,
-                'rx_mean':       round(float(np.mean(rx_vals)),     2) if len(rx_vals)     else np.nan,
-                'rx_std':        round(float(np.std(rx_vals)),      2) if len(rx_vals)     else np.nan,
-                'lane_width_mean': round(float(np.mean(lane_widths)), 2) if len(lane_widths) else np.nan,
-                'conf_mean':     round(float(np.mean(confs)),       4) if len(confs)       else np.nan,
-                'fps':           round(total / duration_s,          1) if duration_s > 0   else np.nan,
+                'method':           method,
+                'weather':          weather,
+                'total_frames':     total,
+                'detected':         n_det,
+                'det_rate_%':       round(n_det / total * 100, 2),
+                'center_mean':      round(float(np.mean(centers)),     4) if len(centers)     else np.nan,
+                'center_std':       round(float(np.std(centers)),      4) if len(centers)     else np.nan,
+                'center_diff_std':  center_diff_std,
+                'err_mean':         round(float(np.mean(lat_err)),     4) if len(lat_err)     else np.nan,
+                'err_std':          round(float(np.std(lat_err)),      4) if len(lat_err)     else np.nan,
+                'lx_mean':          round(float(np.mean(lx_vals)),     2) if len(lx_vals)     else np.nan,
+                'lx_std':           round(float(np.std(lx_vals)),      2) if len(lx_vals)     else np.nan,
+                'lx_diff_std':      lx_diff_std,
+                'rx_mean':          round(float(np.mean(rx_vals)),     2) if len(rx_vals)     else np.nan,
+                'rx_std':           round(float(np.std(rx_vals)),      2) if len(rx_vals)     else np.nan,
+                'rx_diff_std':      rx_diff_std,
+                'lane_width_mean':  round(float(np.mean(lane_widths)), 2) if len(lane_widths) else np.nan,
+                'conf_mean':        round(float(np.mean(confs)),       4) if len(confs)       else np.nan,
+                'fps':              round(total / duration_s,          1) if duration_s > 0   else np.nan,
             })
     return pd.DataFrame(rows)
 

@@ -20,8 +20,11 @@ from launch.substitutions import LaunchConfiguration
 
 RECORD_TOPICS = [
     '/carla/weather_control',
+    '/carla/ego_vehicle/odometry',
+    '/lka/gt/cross_track_m',
     '/lka/yolo/lane_center',
     '/lka/pure_vision/lane_center',
+    '/lka/scnn/lane_center',
 ]
 
 WEATHER_PRESETS = {

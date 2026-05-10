@@ -23,8 +23,9 @@ ros2 launch lka_bringup bring_up_carla.launch.py
 
 ```bash
 # Pure Vision node only
+source install/setup.bash &&
 ros2 launch lka_perception pure_vision.launch.py
 # YOLO node only
 source install/setup.bash &&
-ros2 launch lka_perception lane_detection.launch.py
+ros2 launch lka_perception yolo.launch.py
 ```

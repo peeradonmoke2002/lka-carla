@@ -12,6 +12,7 @@ __pycache__/
 
 # dataset
 lka.yolo26/
+lka.scnn/
 
 # model
 models/

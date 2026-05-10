@@ -24,7 +24,6 @@ def generate_launch_description():
             LaunchConfiguration('params_file'),
             {
                 'use_sim_time': True,
-                'roi_yaml': os.path.join(pkg_dir, 'config', 'roi.yaml'),
             },
         ],
     )

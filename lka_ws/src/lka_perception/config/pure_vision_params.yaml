@@ -1,10 +1,12 @@
 /**:
   ros__parameters:
+    roi_yaml: "/home/peeradon/lka-carla-yolo/lka_ws/src/lka_perception/config/roi.yaml"
     # ROI geometry
     roi_margin_ratio: 0.08
     y_top_ratio: 0.55
     y_ref_ratio: 0.85
     lane_width_px: 760
+    lane_width_m: 4.0
 
     # Hough transform
     hough_threshold: 15
