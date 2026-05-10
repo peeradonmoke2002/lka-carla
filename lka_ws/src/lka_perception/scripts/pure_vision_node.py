@@ -409,7 +409,6 @@ class PureVisionNode(Node):
         lane_msg.detected     = detected
         lane_msg.lx           = float(lx) if lx is not None else -1.0
         lane_msg.rx           = float(rx) if rx is not None else -1.0
-        self.pub_center.publish(lane_msg)
         self.pub_center_debug.publish(lane_msg)
 
         vis = self.draw_debug(img, self.weather_mode, left_fit, right_fit,

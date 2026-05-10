@@ -50,13 +50,30 @@ def _shade_weather(ax, spans):
                 color=W_TXT_CLR[sp['weather']], transform=ax.get_xaxis_transform(), zorder=5)
 
 
+def _annotate_bar_values(ax, bars, vals, fmt, pad_ratio=0.03, inside_ratio=0.06, y_offset_ratio=0.0):
+    y_top = ax.get_ylim()[1] if ax.get_ylim()[1] > 0 else 1.0
+    for bar, val in zip(bars, vals):
+        if np.isnan(val):
+            continue
+        if val > 0.6 * y_top:
+            y = val - (inside_ratio * y_top)
+            va = 'top'
+        else:
+            y = val + (pad_ratio * y_top)
+            va = 'bottom'
+        y += y_offset_ratio * y_top
+        ax.text(bar.get_x() + bar.get_width() / 2, y,
+                fmt.format(val), ha='center', va=va, fontsize=9)
+
+
 # ── Per-method figure (time-series + summary bars) ─────────────
 
 def plot_method_figure(raw, metrics, method, out_path):
     W = W_IMAGE
     r = raw[raw['method'] == method].copy().sort_values('timestamp_ns')
     r['t_sec']  = (r['timestamp_ns'] - r['timestamp_ns'].min()) / 1e9
-    r['err_px'] = (r['center'] - 0.5) * W
+    use_gt = 'err_gt' in r.columns and r['err_gt'].notna().any()
+    r['err_px'] = r['err_gt'] * W if use_gt else (r['center'] - 0.5) * W
 
     m = metrics[metrics['method'] == method].set_index('weather').reindex(WEATHER_ORDER)
 
@@ -119,7 +136,8 @@ def plot_method_figure(raw, metrics, method, out_path):
     ax.axhline(0, color='gray', lw=1.2, ls='--', zorder=1)
     legend_handles.append(plt.Line2D([0], [0], color='gray', ls='--', label='ideal error = 0'))
     ax.set_ylabel(f'Lateral Error (px,  W={W})')
-    ax.set_title(f'Lateral Error from Lane Center  (pixels, W={W})')
+    err_title = 'GT' if use_gt else 'Lane Center'
+    ax.set_title(f'Lateral Error from {err_title}  (pixels, W={W})')
     ax.legend(handles=legend_handles, fontsize=8, loc='lower right')
     _shade_weather(ax, spans)
 
@@ -153,7 +171,8 @@ def plot_method_figure(raw, metrics, method, out_path):
                 bbox=dict(boxstyle='round,pad=0.2', fc='white', alpha=0.75))
     ax.set_xticklabels(box_labels)
     ax.set_ylabel('Lateral Error (px)')
-    ax.set_title('Lateral Error Distribution per Weather  (box = IQR, line = median)')
+    err_title = 'GT' if use_gt else 'Lane Center'
+    ax.set_title(f'Lateral Error Distribution per Weather  (box = IQR, line = median)\n(ref={err_title})')
     ax.legend(fontsize=8)
 
     # ── Panel 4: Detection rate ─────────────────────────────────
@@ -164,10 +183,7 @@ def plot_method_figure(raw, metrics, method, out_path):
     ax.axhline(100, color='green', lw=1, ls='--', alpha=0.4)
     ax.set_ylabel('Detection Rate (%)')
     ax.set_title('Detection Rate')
-    for bar, val in zip(bars, vals):
-        if not np.isnan(val):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
-                    f'{val:.0f}%', ha='center', va='bottom', fontsize=9)
+    _annotate_bar_values(ax, bars, vals, '{:.0f}%')
     ax.tick_params(axis='x', labelsize=8)
 
     # ── Panel 5: Confidence (YOLO only) or FPS (Pure Vision / SCNN) ────────
@@ -181,19 +197,13 @@ def plot_method_figure(raw, metrics, method, out_path):
         ax.set_ylim(0, 1.1)
         ax.set_ylabel('Mean Confidence')
         ax.set_title('Detection Confidence')
-        for bar, val in zip(bars, conf_vals):
-            if not np.isnan(val):
-                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
-                        f'{val:.3f}', ha='center', va='bottom', fontsize=9)
+        _annotate_bar_values(ax, bars, np.array(conf_vals, dtype=float), '{:.3f}', pad_ratio=0.01, inside_ratio=0.03)
     else:
         fps_vals = m['fps'].values.astype(float)
         bars = ax.bar(weathers, fps_vals, color=colors, edgecolor='black', linewidth=0.8)
         ax.set_ylabel('FPS')
         ax.set_title('Frames per Second')
-        for bar, val in zip(bars, fps_vals):
-            if not np.isnan(val):
-                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.1,
-                        f'{val:.1f}', ha='center', va='bottom', fontsize=9)
+        _annotate_bar_values(ax, bars, fps_vals, '{:.1f}', pad_ratio=0.02, inside_ratio=0.04)
     ax.tick_params(axis='x', labelsize=8)
 
     # ── Panel 6: Lane position stability (lx_std, rx_std) ──────
@@ -206,11 +216,14 @@ def plot_method_figure(raw, metrics, method, out_path):
                      color='#3498DB', edgecolor='black', linewidth=0.8)
     bars_rx = ax.bar(x6 + w6 / 2, rx_stds, w6, label='rx_std',
                      color='#E67E22', edgecolor='black', linewidth=0.8)
-    for bar, val in zip(list(bars_lx) + list(bars_rx),
-                        list(lx_stds) + list(rx_stds)):
-        if not np.isnan(val):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.05,
-                    f'{val:.1f}', ha='center', va='bottom', fontsize=8)
+    _annotate_bar_values(
+        ax,
+        list(bars_lx) + list(bars_rx),
+        np.array(list(lx_stds) + list(rx_stds), dtype=float),
+        '{:.1f}',
+        pad_ratio=0.03,
+        inside_ratio=0.06,
+    )
     ax.set_xticks(x6)
     ax.set_xticklabels(weathers, fontsize=8)
     ax.set_ylabel('Std (pixels)')
@@ -233,7 +246,8 @@ def plot_compare_figure(raw, metrics, out_path):
     t0  = raw['timestamp_ns'].min()
     raw = raw.copy()
     raw['t_sec']  = (raw['timestamp_ns'] - t0) / 1e9
-    raw['err_px'] = (raw['center'] - 0.5) * W
+    use_gt = 'err_gt' in raw.columns and raw['err_gt'].notna().any()
+    raw['err_px'] = raw['err_gt'] * W if use_gt else (raw['center'] - 0.5) * W
 
     # Weather spans from YOLO (both share same bag)
     ref = raw[raw['method'] == 'YOLO'].copy()
@@ -289,7 +303,8 @@ def plot_compare_figure(raw, metrics, out_path):
         for m in methods
     ] + [plt.Line2D([0], [0], color='gray', ls='--', label='ideal = 0')]
     ax.set_ylabel(f'Lateral Error (px,  W={W})')
-    ax.set_title(f'Lateral Error over Time  (pixels, W={W})')
+    err_title = 'GT' if use_gt else 'Lane Center'
+    ax.set_title(f'Lateral Error over Time  (pixels, W={W}, ref={err_title})')
     ax.legend(handles=legend_handles, fontsize=8, loc='lower right')
     _shade_weather(ax, spans)
 
@@ -327,7 +342,8 @@ def plot_compare_figure(raw, metrics, out_path):
     ax.set_xticks(tick_pos)
     ax.set_xticklabels(tick_lbl)
     ax.set_ylabel('Lateral Error (px)')
-    ax.set_title('Lateral Error Distribution per Weather  (box = IQR, line = median)')
+    err_title = 'GT' if use_gt else 'Lane Center'
+    ax.set_title(f'Lateral Error Distribution per Weather  (box = IQR, line = median)\n(ref={err_title})')
     legend_handles = [plt.matplotlib.patches.Patch(facecolor=M_COLORS[m], label=m)
                       for m in methods]
     ax.legend(handles=legend_handles, fontsize=8)
@@ -343,10 +359,8 @@ def plot_compare_figure(raw, metrics, out_path):
         vals = m['det_rate_%'].values.astype(float)
         bars = ax.bar(x + offsets_m[i], vals, bw,
                       label=method, color=M_COLORS.get(method, '#888'), edgecolor='black', linewidth=0.7)
-        for bar, val in zip(bars, vals):
-            if not np.isnan(val):
-                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
-                        f'{val:.0f}%', ha='center', va='bottom', fontsize=7)
+        y_off = (i - (n_m - 1) / 2) * 0.06
+        _annotate_bar_values(ax, bars, vals, '{:.0f}%', pad_ratio=0.02, inside_ratio=0.05, y_offset_ratio=y_off)
     ax.set_xticks(x)
     ax.set_xticklabels(WEATHER_ORDER, fontsize=8)
     ax.set_ylim(0, 115)
@@ -362,10 +376,8 @@ def plot_compare_figure(raw, metrics, out_path):
         vals = m['fps'].values.astype(float)
         bars = ax.bar(x + offsets_m[i], vals, bw,
                       label=method, color=M_COLORS.get(method, '#888'), edgecolor='black', linewidth=0.7)
-        for bar, val in zip(bars, vals):
-            if not np.isnan(val):
-                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.1,
-                        f'{val:.1f}', ha='center', va='bottom', fontsize=7)
+        y_off = (i - (n_m - 1) / 2) * 0.06
+        _annotate_bar_values(ax, bars, vals, '{:.1f}', pad_ratio=0.02, inside_ratio=0.04, y_offset_ratio=y_off)
     ax.set_xticks(x)
     ax.set_xticklabels(WEATHER_ORDER, fontsize=8)
     ax.set_ylabel('FPS')

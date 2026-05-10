@@ -226,7 +226,6 @@ class YoloNode(Node):
         lane_msg.detected     = detected
         lane_msg.lx           = lx_val
         lane_msg.rx           = rx_val
-        self.pub_center.publish(lane_msg)
         self.pub_center_debug.publish(lane_msg)
 
         self.get_logger().info(

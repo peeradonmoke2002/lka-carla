@@ -22,6 +22,9 @@ import rosbag2_py
 
 WEATHER_ORDER = ['rain', 'clear', 'fog', 'night']
 COLORS = {'rain': '#4C9BE8', 'clear': '#F5A623', 'fog': '#9B9B9B', 'night': '#2C3E50'}
+LANE_WIDTH_PX = 760
+LANE_WIDTH_M = 4.0
+CTE_MAX_DT_SEC = 0.2
 
 
 def classify_weather(msg):
@@ -43,9 +46,11 @@ def read_bag(bag_path: str):
 
     WeatherMsg    = get_message('carla_msgs/msg/CarlaWeatherParameters')
     LaneCenterMsg = get_message('lka_msgs/msg/LaneCenter')
+    CteMsg         = get_message('std_msgs/msg/Float64')
 
     weather_events = []
     lane_records   = []
+    cte_records    = []
 
     while reader.has_next():
         topic, data, timestamp = reader.read_next()
@@ -70,7 +75,14 @@ def read_bag(bag_path: str):
                 'rx':           float(msg.rx),
             })
 
-    return pd.DataFrame(weather_events), pd.DataFrame(lane_records)
+        elif topic == '/lka/gt/cross_track_m':
+            msg = deserialize_message(data, CteMsg)
+            cte_records.append({
+                'timestamp_ns': timestamp,
+                'cte_m':        float(msg.data),
+            })
+
+    return pd.DataFrame(weather_events), pd.DataFrame(lane_records), pd.DataFrame(cte_records)
 
 
 def assign_weather(lane_df, weather_df, window_sec=60.0):
@@ -90,6 +102,23 @@ def assign_weather(lane_df, weather_df, window_sec=60.0):
         lane_df.loc[mask, 't_in_window']  = (lane_df.loc[mask, 'timestamp_ns'] - ts[i]) / 1e9
 
     return lane_df[lane_df['weather'] != 'unknown'].reset_index(drop=True)
+
+
+def attach_cte(lane_df, cte_df, max_gap_sec=CTE_MAX_DT_SEC):
+    lane_df = lane_df.copy()
+    lane_df['cte_m'] = np.nan
+    if cte_df.empty:
+        return lane_df
+    lane_sorted = lane_df.sort_values('timestamp_ns')
+    cte_sorted  = cte_df.sort_values('timestamp_ns')
+    tol_ns = int(max_gap_sec * 1e9)
+    return pd.merge_asof(
+        lane_sorted,
+        cte_sorted,
+        on='timestamp_ns',
+        direction='nearest',
+        tolerance=tol_ns,
+    )
 
 
 TOPIC_LABELS = {
@@ -114,11 +143,16 @@ def compute_metrics(lane_df):
             n_det      = int(w['detected'].sum())
             valid      = w[w['detected']]
             centers    = valid['center'].values
-            lat_err    = np.abs(centers - 0.5)
+            if 'cte_m' in valid.columns and valid['cte_m'].notna().any():
+                valid_err = valid[valid['cte_m'].notna()]
+                true_center = 0.5 - (valid_err['cte_m'] / LANE_WIDTH_M)
+                lat_err = np.abs(valid_err['center'] - true_center)
+            else:
+                lat_err = np.abs(centers - 0.5)
             confs      = valid['confidence'].values
             lx_vals    = valid[valid['lx'] > 0]['lx'].values
             rx_vals    = valid[valid['rx'] > 0]['rx'].values
-            lane_widths = valid[(valid['lx'] > 0) & (valid['rx'] > 0)].eval('rx - lx').values
+            lane_widths = np.full(len(valid), LANE_WIDTH_PX) if len(valid) else np.array([])
             duration_s = (w['timestamp_ns'].max() - w['timestamp_ns'].min()) / 1e9
             # first-difference std: frame-to-frame jitter proxy, independent of road curvature
             center_diff_std = round(float(np.std(np.diff(centers))), 4) if len(centers) > 1 else np.nan
@@ -205,13 +239,22 @@ def main():
     args = parser.parse_args()
 
     print(f'Reading: {args.bag_path}')
-    weather_df, lane_df = read_bag(args.bag_path)
+    weather_df, lane_df, cte_df = read_bag(args.bag_path)
     print(f'Weather events : {len(weather_df)}')
     print(f'Lane messages  : {len(lane_df)}')
+    print(f'CTE messages   : {len(cte_df)}')
     if not weather_df.empty:
         print(f'Weather sequence: {list(weather_df["weather"])}')
 
     lane_df = assign_weather(lane_df, weather_df, window_sec=60.0)
+    lane_df = attach_cte(lane_df, cte_df)
+    if 'cte_m' in lane_df.columns:
+        lane_df['true_center'] = 0.5 - (lane_df['cte_m'] / LANE_WIDTH_M)
+        lane_df['err_gt'] = np.abs(lane_df['center'] - lane_df['true_center'])
+    else:
+        lane_df['cte_m'] = np.nan
+        lane_df['true_center'] = np.nan
+        lane_df['err_gt'] = np.nan
     metrics = compute_metrics(lane_df)
 
     print('\n── Metrics ──────────────────────────────────────────────')
@@ -222,7 +265,8 @@ def main():
 
     # raw data CSV — every frame with weather label
     raw_cols = ['timestamp_ns', 't_in_window', 'weather', 'topic',
-                'center', 'confidence', 'detected', 'lx', 'rx']
+                'center', 'confidence', 'detected', 'lx', 'rx',
+                'cte_m', 'true_center', 'err_gt']
     lane_df[raw_cols].to_csv(out_dir / 'raw_frames.csv', index=False)
     print(f'Raw data saved: {out_dir}/raw_frames.csv  ({len(lane_df)} rows)')
 
