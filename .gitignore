@@ -15,5 +15,5 @@ lka.yolo26/
 lka.scnn/
 
 # model
-models/
-yolo26l-seg.pt
+# models/
+# yolo26l-seg.pt

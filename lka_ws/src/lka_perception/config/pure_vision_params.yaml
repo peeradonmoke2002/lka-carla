@@ -1,40 +1,44 @@
 /**:
   ros__parameters:
-    roi_yaml: "/home/peeradon/lka-carla-yolo/lka_ws/src/lka_perception/config/roi.yaml"
-    # ROI geometry
-    roi_margin_ratio: 0.08
-    y_top_ratio: 0.55
-    y_ref_ratio: 0.85
-    lane_width_px: 760
-    lane_width_m: 4.0
 
-    # Hough transform
-    hough_threshold: 15
+    # ── ROI ───────────────────────────────────────────────────────
+    roi_yaml:         "/home/peeradon/lka-carla-yolo/lka_ws/src/lka_perception/config/roi.yaml"
+    roi_margin_ratio: 0.08         # horizontal margin from ROI centre (ratio)
+    y_top_ratio:      0.55         # ROI top boundary  (ratio of image height)
+    y_ref_ratio:      0.85         # measurement row   (ratio of image height)
+    lane_width_px:    760          # lane width at y_ref (pixels)
+    lane_width_m:     4.0          # Town01 lane width (metres)
+
+    # ── Hough transform ───────────────────────────────────────────
+    hough_threshold:       15
     hough_min_line_length: 20
-    hough_max_line_gap: 80
+    hough_max_line_gap:    80
 
-    # Lane slope bounds
-    left_slope_min: -2.5
-    left_slope_max: -0.3
-    right_slope_min: 0.3
-    right_slope_max: 2.5
+    # ── Lane slope bounds ─────────────────────────────────────────
+    left_slope_min:  -2.5
+    left_slope_max:  -0.3
+    right_slope_min:  0.3
+    right_slope_max:  2.5
 
-    # Hysteresis state machine
-    confirm_frames: 3
-    lost_frames: 5
-    jump_thresh: 0.12
+    # ── Hysteresis ────────────────────────────────────────────────
+    # false = raw output  → use for perception eval
+    # true  = smoothed    → use for closed-loop driving
+    enable_hysteresis: false
+    confirm_frames:    3           # good frames needed to enter TRACKING
+    lost_frames:       5           # bad frames tolerated before leaving TRACKING
+    jump_thresh:       0.12        # max allowed center jump (normalised)
 
-    # HSV thresholds per weather [H, S, V]
-    hsv_lo_clear: [10, 30, 250]
+    # ── HSV thresholds per weather [H_lo, S_lo, V_lo] ────────────
+    hsv_lo_clear: [10,  30, 250]
     hsv_hi_clear: [40, 120, 255]
-    hsv_lo_fog:   [10,  5, 180]
+    hsv_lo_fog:   [10,   5, 180]
     hsv_hi_fog:   [40, 120, 255]
     hsv_lo_night: [10, 150,  30]
     hsv_hi_night: [35, 255, 255]
     hsv_lo_rain:  [15,  25, 150]
     hsv_hi_rain:  [35, 255, 255]
 
-    # Canny thresholds per weather [lo, hi]
+    # ── Canny thresholds per weather [lo, hi] ────────────────────
     canny_clear: [30, 90]
     canny_fog:   [20, 60]
     canny_night: [20, 60]

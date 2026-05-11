@@ -1,24 +1,21 @@
 roi:
   image_h: 900
   image_w: 1600
+
+  # Trapezoid polygon (x, y) — covers ego lane in front of vehicle
+  #
+  #   (764,457)──(825,456)        ← top edge  (horizon)
+  #      /                 \
+  #   (102,892)────────(1465,894) ← bottom edge (near vehicle)
+  #
   polygon:
-  - !!python/tuple
-    - 102
-    - 892
-  - !!python/tuple
-    - 764
-    - 457
-  - !!python/tuple
-    - 825
-    - 456
-  - !!python/tuple
-    - 1465
-    - 894
-  x1: 102
-  x1_norm: 0.0638
-  x2: 1465
-  x2_norm: 0.9156
-  y1: 456
-  y1_norm: 0.5067
-  y2: 894
-  y2_norm: 0.9933
+    - [102,  892]   # bottom-left
+    - [764,  457]   # top-left
+    - [825,  456]   # top-right
+    - [1465, 894]   # bottom-right
+
+  # Bounding box of polygon (normalised 0–1)
+  x1: 102     # x1_norm: 0.0638
+  x2: 1465    # x2_norm: 0.9156
+  y1: 456     # y1_norm: 0.5067
+  y2: 894     # y2_norm: 0.9933

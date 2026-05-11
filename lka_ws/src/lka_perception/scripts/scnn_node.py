@@ -62,6 +62,10 @@ class SCNNNode(Node):
         self.declare_parameter('prob_thresh',  0.3)   # min softmax prob to count a pixel
         self.declare_parameter('lane_width_px', 760)  # fallback when one side missing
         self.declare_parameter('lane_width_m', 4.0)   # Town01 driving lane width
+        self.declare_parameter('enable_hysteresis', False)
+        self.declare_parameter('confirm_frames', 3)
+        self.declare_parameter('lost_frames', 5)
+        self.declare_parameter('jump_thresh', 0.12)
 
         weights        = self.get_parameter('weights').value
         self.in_w      = self.get_parameter('input_w').value
@@ -69,11 +73,21 @@ class SCNNNode(Node):
         self.y_ref_r   = self.get_parameter('y_ref_ratio').value
         self.thresh    = self.get_parameter('prob_thresh').value
         self.lane_w    = self.get_parameter('lane_width_px').value
-        self.lane_width_m = self.get_parameter('lane_width_m').value
+        self.lane_width_m      = self.get_parameter('lane_width_m').value
+        self.enable_hysteresis = self.get_parameter('enable_hysteresis').value
+        self.confirm_frames    = self.get_parameter('confirm_frames').value
+        self.lost_frames       = self.get_parameter('lost_frames').value
+        self.jump_thresh       = self.get_parameter('jump_thresh').value
 
         self.model, self.device = self._load_model(weights)
         self.bridge = CvBridge()
         self._cte   = None   # latest GT cross-track error (m)
+
+        # Hysteresis state (used when enable_hysteresis=True)
+        self.tracking    = False
+        self.good_streak = 0
+        self.bad_streak  = 0
+        self.prev_center = None
 
         self.create_subscription(Image, '/carla/ego_vehicle/CAM_FRONT/image', self.image_callback, 10)
         self.create_subscription(CarlaWeatherParameters, '/carla/weather_control', self.weather_callback, 10)
@@ -178,6 +192,43 @@ class SCNNNode(Node):
         label_x = max(0, int(xs[-1]) + label_offset_x)
         cv2.putText(img, label, (label_x, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
+    # ── Hysteresis ─────────────────────────────────────────────────────
+
+    def is_good_detection(self, center_norm, both_sides):
+        if center_norm is None or not both_sides:
+            return False
+        if self.prev_center is not None and abs(center_norm - self.prev_center) > self.jump_thresh:
+            return False
+        return True
+
+    def stability_filter(self, center_norm, both_sides):
+        good = self.is_good_detection(center_norm, both_sides)
+        if not self.tracking:
+            if good:
+                self.good_streak += 1
+                self.prev_center  = center_norm
+                if self.good_streak >= self.confirm_frames:
+                    self.tracking   = True
+                    self.bad_streak = 0
+                    self.get_logger().info('Hysteresis → TRACKING')
+            else:
+                self.good_streak = 0
+                self.prev_center = None
+            return None
+        else:
+            if good:
+                self.bad_streak  = 0
+                self.prev_center = center_norm
+                return center_norm
+            else:
+                self.bad_streak += 1
+                if self.bad_streak >= self.lost_frames:
+                    self.tracking    = False
+                    self.good_streak = 0
+                    self.prev_center = None
+                    self.get_logger().info('Hysteresis → SEARCHING')
+                return self.prev_center
+
     # ── Callbacks ──────────────────────────────────────────────────────
 
     def _cte_cb(self, msg: Float64):
@@ -216,22 +267,33 @@ class SCNNNode(Node):
         lx = float(np.polyval(left_fit[0],  y_ref)) if left_fit  is not None else None
         rx = float(np.polyval(right_fit[0], y_ref)) if right_fit is not None else None
 
-        if lx is not None and rx is not None:
-            center_norm = (lx + rx) / 2.0 / w
-            detected = True
-        elif lx is not None:
-            center_norm = (lx + (lx + self.lane_w)) / 2.0 / w
-            detected = True
-        elif rx is not None:
-            center_norm = ((rx - self.lane_w) + rx) / 2.0 / w
-            detected = True
+        both_sides = lx is not None and rx is not None
+
+        if self.enable_hysteresis:
+            # Synthesize missing side, then apply hysteresis filter
+            if both_sides:
+                center_norm_raw = (lx + rx) / 2.0 / w
+            elif lx is not None:
+                center_norm_raw = (lx + lx + self.lane_w) / 2.0 / w
+            elif rx is not None:
+                center_norm_raw = (rx - self.lane_w + rx) / 2.0 / w
+            else:
+                center_norm_raw = None
+            stable   = self.stability_filter(center_norm_raw, both_sides)
+            detected = stable is not None
+            center_norm = float(stable) if detected else -1.0
         else:
-            center_norm = -1.0
-            detected = False
+            # Raw: only publish when both sides found; discard single-side synthesis
+            if both_sides:
+                center_norm = (lx + rx) / 2.0 / w
+                detected    = True
+            else:
+                center_norm = -1.0
+                detected    = False
 
         lane_msg              = LaneCenter()
         lane_msg.header.stamp = self.get_clock().now().to_msg()
-        lane_msg.center       = float(center_norm) if detected else -1.0
+        lane_msg.center       = center_norm
         lane_msg.confidence   = 0.0
         lane_msg.detected     = detected
         lane_msg.lx           = float(lx) if lx is not None else -1.0

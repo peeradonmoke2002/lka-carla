@@ -45,6 +45,7 @@ class PureVisionNode(Node):
         self.declare_parameter('confirm_frames', 3)
         self.declare_parameter('lost_frames', 5)
         self.declare_parameter('jump_thresh', 0.12)
+        self.declare_parameter('enable_hysteresis', False)
         self.declare_parameter('hsv_lo_clear', [10,  30, 250])
         self.declare_parameter('hsv_hi_clear', [40, 120, 255])
         self.declare_parameter('hsv_lo_fog',   [10,   5, 180])
@@ -76,6 +77,7 @@ class PureVisionNode(Node):
         self.confirm_frames    = self.get_parameter('confirm_frames').value
         self.lost_frames       = self.get_parameter('lost_frames').value
         self.jump_thresh       = self.get_parameter('jump_thresh').value
+        self.enable_hysteresis = self.get_parameter('enable_hysteresis').value
         
         def load_hsv(name):
             return np.array(self.get_parameter(name).value, dtype=np.uint8)
@@ -398,17 +400,34 @@ class PureVisionNode(Node):
         left_fit, right_fit, center_norm, lx, rx, y_bottom, y_top, y_ref, both_sides = \
             self.detect_lanes(img, self.weather_mode)
 
-        stable_center = self.stability_filter(center_norm, both_sides)
-        detected      = stable_center is not None
-        center_val    = float(stable_center) if detected else -1.0
+        if self.enable_hysteresis:
+            stable_center = self.stability_filter(center_norm, both_sides)
+            detected      = stable_center is not None
+            center_val    = float(stable_center) if detected else -1.0
+            pub_lx        = float(lx) if lx is not None else -1.0
+            pub_rx        = float(rx) if rx is not None else -1.0
+        else:
+            # Raw: only publish when both sides are found; discard single-side synthesis
+            if both_sides:
+                stable_center = center_norm
+                detected      = True
+                center_val    = float(center_norm)
+                pub_lx        = float(lx)
+                pub_rx        = float(rx)
+            else:
+                stable_center = None
+                detected      = False
+                center_val    = -1.0
+                pub_lx        = -1.0
+                pub_rx        = -1.0
 
         lane_msg              = LaneCenter()
         lane_msg.header.stamp = self.get_clock().now().to_msg()
         lane_msg.center       = center_val
         lane_msg.confidence   = 0.0
         lane_msg.detected     = detected
-        lane_msg.lx           = float(lx) if lx is not None else -1.0
-        lane_msg.rx           = float(rx) if rx is not None else -1.0
+        lane_msg.lx           = pub_lx
+        lane_msg.rx           = pub_rx
         self.pub_center_debug.publish(lane_msg)
 
         vis = self.draw_debug(img, self.weather_mode, left_fit, right_fit,
@@ -417,7 +436,10 @@ class PureVisionNode(Node):
 
         raw_str = f'{center_norm:.3f}' if center_norm is not None else 'MISS'
         sides   = 'both' if both_sides else ('one' if center_norm is not None else 'none')
-        state   = 'TRACKING' if self.tracking else f'SEARCHING({self.good_streak}/{self.confirm_frames})'
+        if self.enable_hysteresis:
+            state = 'TRACKING' if self.tracking else f'SEARCHING({self.good_streak}/{self.confirm_frames})'
+        else:
+            state = 'RAW'
         self.get_logger().info(
             f'[{self.weather_mode}] {state} raw={raw_str}({sides}) out={center_val:.3f}',
             throttle_duration_sec=1.0,

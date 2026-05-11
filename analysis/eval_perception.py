@@ -23,7 +23,8 @@ import rosbag2_py
 WEATHER_ORDER = ['rain', 'clear', 'fog', 'night']
 COLORS = {'rain': '#4C9BE8', 'clear': '#F5A623', 'fog': '#9B9B9B', 'night': '#2C3E50'}
 LANE_WIDTH_PX = 760
-LANE_WIDTH_M = 4.0
+LANE_WIDTH_M  = 4.0
+W_IMAGE       = 1600   # camera image width (pixels)
 CTE_MAX_DT_SEC = 0.2
 
 
@@ -145,7 +146,8 @@ def compute_metrics(lane_df):
             centers    = valid['center'].values
             if 'cte_m' in valid.columns and valid['cte_m'].notna().any():
                 valid_err = valid[valid['cte_m'].notna()]
-                true_center = 0.5 - (valid_err['cte_m'] / LANE_WIDTH_M)
+                # cte_m → normalized image coords: 1 m lateral = LANE_WIDTH_PX/LANE_WIDTH_M px, then / W_IMAGE
+                true_center = 0.5 - valid_err['cte_m'] * (LANE_WIDTH_PX / LANE_WIDTH_M) / W_IMAGE
                 lat_err = np.abs(valid_err['center'] - true_center)
             else:
                 lat_err = np.abs(centers - 0.5)
@@ -249,7 +251,7 @@ def main():
     lane_df = assign_weather(lane_df, weather_df, window_sec=60.0)
     lane_df = attach_cte(lane_df, cte_df)
     if 'cte_m' in lane_df.columns:
-        lane_df['true_center'] = 0.5 - (lane_df['cte_m'] / LANE_WIDTH_M)
+        lane_df['true_center'] = 0.5 - lane_df['cte_m'] * (LANE_WIDTH_PX / LANE_WIDTH_M) / W_IMAGE
         lane_df['err_gt'] = np.abs(lane_df['center'] - lane_df['true_center'])
     else:
         lane_df['cte_m'] = np.nan

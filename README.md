@@ -92,8 +92,7 @@ cd carla
 
 ```bash
 cd lka-carla-yolo/lka_ws
-source install/setup.bash
-ros2 launch lka_bringup bring_up_carla.launch.py
+source install/setup.bash && ros2 launch lka_bringup bring_up_carla.launch.py
 ```
 
 3. Start Gt node (for evaluation)

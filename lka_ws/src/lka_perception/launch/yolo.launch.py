@@ -11,8 +11,8 @@ def generate_launch_description():
 
     params_arg = DeclareLaunchArgument(
         'params_file',
-        default_value=os.path.join(pkg_dir, 'config', 'lane_detection_params.yaml'),
-        description='Path to lane_detection_params.yaml',
+        default_value=os.path.join(pkg_dir, 'config', 'yolo_params.yaml'),
+        description='Path to yolo_params.yaml',
     )
 
     yolo_node = Node(

@@ -99,19 +99,22 @@ def generate_launch_description():
 
     )
 
-    # carla_spawn_objects exits after spawning — use it as trigger
-    spawn_objects = Node(
-        package='carla_spawn_objects',
-        executable='carla_spawn_objects',
-        name='carla_spawn_objects',
+    spawn_entity = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory(pkg),
+                'launch', 'carla_spawn_vehicle.launch.py'
+            )
+        )
+    )
+
+
+    gt_node = Node(
+        package='lka_perception',
+        executable='gt_node.py',
+        name='gt_node',
         output='screen',
-        emulate_tty=True,
-        parameters=[{
-            'objects_definition_file': os.path.join(
-                get_package_share_directory(pkg), 'config', 'objects.json'),
-            'spawn_point_ego_vehicle': 'None',
-            'spawn_sensors_only': False,
-        }],
+        parameters=[{'use_sim_time': True}],
     )
 
     manual_control = IncludeLaunchDescription(
@@ -119,9 +122,8 @@ def generate_launch_description():
             os.path.join(get_package_share_directory(
                 'carla_manual_control'), 'carla_manual_control.launch.py')
         ),
-        launch_arguments={'role_name': 'ego_vehicle'}.items()
+        launch_arguments={'role_name': 'ego_vehicle'}.items(),
     )
-
 
     ld = LaunchDescription()
     ld.add_action(host)
@@ -135,7 +137,8 @@ def generate_launch_description():
     ld.add_action(register_all_sensors)
     ld.add_action(ego_vehicle_role_name)
     ld.add_action(carla_bridge)
-    ld.add_action(spawn_objects)
+    ld.add_action(spawn_entity)
+    ld.add_action(gt_node)
     ld.add_action(manual_control)
 
     return ld

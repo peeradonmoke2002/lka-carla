@@ -25,6 +25,11 @@ class YoloNode(Node):
         self.declare_parameter("y_top_ratio", 0.50)
         self.declare_parameter("y_ref_ratio", 0.85)
         self.declare_parameter("lane_width_m", 4.0)  # Town01 driving lane width
+        self.declare_parameter("lane_width_px", 760)  # fallback when one side missing
+        self.declare_parameter("enable_hysteresis", False)
+        self.declare_parameter("confirm_frames", 3)
+        self.declare_parameter("lost_frames", 5)
+        self.declare_parameter("jump_thresh", 0.12)
 
         # ── Load parameters ───────────────────────────────────────────
         weights           = self.get_parameter("weights").value
@@ -34,11 +39,22 @@ class YoloNode(Node):
         self.min_pixels   = self.get_parameter("min_pixels").value
         self.y_top_ratio  = self.get_parameter("y_top_ratio").value
         self.y_ref_ratio  = self.get_parameter("y_ref_ratio").value
-        self.lane_width_m = self.get_parameter("lane_width_m").value
+        self.lane_width_m  = self.get_parameter("lane_width_m").value
+        self.lane_width_px = self.get_parameter("lane_width_px").value
+        self.enable_hysteresis = self.get_parameter("enable_hysteresis").value
+        self.confirm_frames    = self.get_parameter("confirm_frames").value
+        self.lost_frames       = self.get_parameter("lost_frames").value
+        self.jump_thresh       = self.get_parameter("jump_thresh").value
 
         self.model  = YOLO(weights)
         self.bridge = CvBridge()
         self._cte   = None   # latest GT cross-track error (m)
+
+        # Hysteresis state (used when enable_hysteresis=True)
+        self.tracking    = False
+        self.good_streak = 0
+        self.bad_streak  = 0
+        self.prev_center = None
 
         self.create_subscription(Image, "/carla/ego_vehicle/CAM_FRONT/image", self.image_callback, 10)
         self.create_subscription(CarlaWeatherParameters, "/carla/weather_control", self.weather_callback, 10)
@@ -199,6 +215,43 @@ class YoloNode(Node):
         cv2.putText(img, f"conf:   {conf:.3f}", (10, 80),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
+    # ── Hysteresis ─────────────────────────────────────────────────────
+
+    def is_good_detection(self, center_norm, both_sides):
+        if center_norm is None or not both_sides:
+            return False
+        if self.prev_center is not None and abs(center_norm - self.prev_center) > self.jump_thresh:
+            return False
+        return True
+
+    def stability_filter(self, center_norm, both_sides):
+        good = self.is_good_detection(center_norm, both_sides)
+        if not self.tracking:
+            if good:
+                self.good_streak += 1
+                self.prev_center  = center_norm
+                if self.good_streak >= self.confirm_frames:
+                    self.tracking   = True
+                    self.bad_streak = 0
+                    self.get_logger().info('Hysteresis → TRACKING')
+            else:
+                self.good_streak = 0
+                self.prev_center = None
+            return None
+        else:
+            if good:
+                self.bad_streak  = 0
+                self.prev_center = center_norm
+                return center_norm
+            else:
+                self.bad_streak += 1
+                if self.bad_streak >= self.lost_frames:
+                    self.tracking    = False
+                    self.good_streak = 0
+                    self.prev_center = None
+                    self.get_logger().info('Hysteresis → SEARCHING')
+                return self.prev_center
+
     # ── Main image callback ────────────────────────────────────────────
 
     def image_callback(self, msg: Image):
@@ -214,10 +267,30 @@ class YoloNode(Node):
         self.draw_debug(annotated, center_px, mean_conf, left_fit, right_fit, y_ref)
         self.pub_enhanced.publish(self.bridge.cv2_to_imgmsg(annotated, encoding="bgr8"))
 
-        detected    = center_px is not None
-        center_norm = float(center_px / w) if detected else -1.0
-        lx_val = float(np.polyval(left_fit[0],  y_ref)) if left_fit  is not None else -1.0
-        rx_val = float(np.polyval(right_fit[0], y_ref)) if right_fit is not None else -1.0
+        lx_raw = float(np.polyval(left_fit[0],  y_ref)) if left_fit  is not None else None
+        rx_raw = float(np.polyval(right_fit[0], y_ref)) if right_fit is not None else None
+        both_sides = left_fit is not None and right_fit is not None
+
+        if self.enable_hysteresis:
+            # Synthesize missing side, then apply hysteresis filter
+            if center_px is not None:
+                center_norm_raw = float(center_px / w)
+            elif lx_raw is not None:
+                center_norm_raw = (lx_raw + lx_raw + self.lane_width_px) / 2.0 / w
+            elif rx_raw is not None:
+                center_norm_raw = (rx_raw - self.lane_width_px + rx_raw) / 2.0 / w
+            else:
+                center_norm_raw = None
+            stable = self.stability_filter(center_norm_raw, both_sides)
+            detected    = stable is not None
+            center_norm = float(stable) if detected else -1.0
+        else:
+            # Raw: only publish when both sides found (no synthesis)
+            detected    = center_px is not None
+            center_norm = float(center_px / w) if detected else -1.0
+
+        lx_val = lx_raw if lx_raw is not None else -1.0
+        rx_val = rx_raw if rx_raw is not None else -1.0
 
         lane_msg              = LaneCenter()
         lane_msg.header.stamp = self.get_clock().now().to_msg()

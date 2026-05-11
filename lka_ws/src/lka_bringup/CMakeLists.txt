@@ -12,4 +12,9 @@ install(DIRECTORY
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(PROGRAMS
+  scripts/run_trials.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 ament_package()
