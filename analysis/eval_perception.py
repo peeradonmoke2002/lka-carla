@@ -185,46 +185,47 @@ def compute_metrics(lane_df):
     return pd.DataFrame(rows)
 
 
-def plot_results(metrics, lane_df, out_dir: Path):
-    weathers = metrics['weather'].tolist()
-    colors   = [COLORS.get(w, 'gray') for w in weathers]
+def plot_results(metrics: pd.DataFrame, out_dir: Path):
+    """Grouped bar chart matching Phase 4 style: method × weather."""
+    weathers = WEATHER_ORDER
+    methods  = [m for m in METHOD_ORDER if m in metrics['method'].unique()]
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-    fig.suptitle('Perception Evaluation', fontsize=14, fontweight='bold')
+    fig.suptitle('Perception Evaluation — Stationary Vehicle',
+                 fontsize=16, fontweight='bold', y=1.05)
 
-    # Panel 1 — Detection rate
-    ax = axes[0]
-    bars = ax.bar(weathers, metrics['det_rate_%'], color=colors,
-                  edgecolor='black', linewidth=0.8)
-    ax.set_ylim(0, 115)
-    ax.set_ylabel('Detection Rate (%)')
-    ax.set_title('Detection Rate per Weather')
-    ax.axhline(100, color='green', lw=1, ls='--', alpha=0.4)
-    for bar, val in zip(bars, metrics['det_rate_%']):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
-                f'{val:.1f}%', ha='center', va='bottom', fontsize=10)
+    w = 0.26
+    x = np.arange(len(weathers))
 
-    # Panel 2 — Lateral error mean ± std
-    ax = axes[1]
-    ax.bar(weathers, metrics['err_mean'], yerr=metrics['err_std'],
-           color=colors, edgecolor='black', linewidth=0.8, capsize=5)
-    ax.set_ylabel('|center_norm − 0.5|')
-    ax.set_title('Lateral Error (mean ± std)\nlower = better')
-    ax.axhline(0, color='green', lw=1, ls='--', alpha=0.4)
+    def grouped_bars(ax, metric, ylabel, title):
+        for i, method in enumerate(methods):
+            vals = []
+            for wx in weathers:
+                row = metrics[(metrics['method'] == method) & (metrics['weather'] == wx)]
+                vals.append(float(row[metric].values[0]) if len(row) else float('nan'))
+            ax.bar(x + i * w, vals, width=w,
+                   label=method,
+                   color=METHOD_COLORS.get(method, 'gray'),
+                   edgecolor='white', linewidth=0.5)
+        ax.set_xticks(x + w)
+        ax.set_xticklabels([wx.capitalize() for wx in weathers], fontsize=12)
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.set_title(title, fontsize=13, fontweight='bold', pad=8)
+        ax.yaxis.grid(True, linestyle='--', alpha=0.5)
+        ax.set_axisbelow(True)
+        ax.tick_params(axis='y', labelsize=10)
+        ax.set_xlim(-0.2, len(weathers) - 0.2)
 
-    # Panel 3 — center_norm time series
-    ax = axes[2]
-    t0 = lane_df['timestamp_ns'].min()
-    lane_df = lane_df.copy()
-    lane_df['t_sec'] = (lane_df['timestamp_ns'] - t0) / 1e9
-    valid = lane_df[lane_df['detected']]
-    ax.scatter(valid['t_sec'], valid['center'], s=1, alpha=0.3, color='steelblue')
-    ax.axhline(0.5, color='green', lw=1.5, ls='--', label='ideal (0.5)')
-    ax.set_xlabel('Time (s)')
-    ax.set_ylabel('center_norm')
-    ax.set_title('center_norm over Time')
-    ax.set_ylim(0, 1)
-    ax.legend(fontsize=8)
+    grouped_bars(axes[0], 'det_rate_%',     'Detection Rate (%)',
+                 'Detection Rate')
+    grouped_bars(axes[1], 'err_mean',        '|center − true_center| (norm)',
+                 'Lateral Error — lower = better')
+    grouped_bars(axes[2], 'center_diff_std', 'center_diff_std (norm)',
+                 'Lane Stability — lower = better')
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='upper center', ncol=len(methods),
+               fontsize=12, frameon=True, bbox_to_anchor=(0.5, 1.0))
 
     plt.tight_layout()
     out_path = out_dir / 'eval_perception.png'
@@ -290,7 +291,7 @@ def plot_hz_consistency(metrics: pd.DataFrame, out_dir: Path):
 def main():
     parser = argparse.ArgumentParser(description='Perception bag evaluation')
     parser.add_argument('bag_path', help='Path to ROS2 bag directory')
-    parser.add_argument('--out', default='/home/peeradon/lka-carla-yolo/analysis/results',
+    parser.add_argument('--out', default='/home/peeradon/lka-carla-yolo/analysis/results/perception',
                         help='Output directory for plots and CSV')
     args = parser.parse_args()
 
@@ -329,6 +330,7 @@ def main():
     metrics.to_csv(out_dir / 'metrics.csv', index=False)
     print(f'Results saved to {out_dir}')
 
+    plot_results(metrics, out_dir)
     plot_hz_consistency(metrics, out_dir)
 
 

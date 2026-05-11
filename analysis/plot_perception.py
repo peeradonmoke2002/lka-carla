@@ -1,14 +1,27 @@
 #!/usr/bin/python3
 """
 Plot perception evaluation from raw_frames.csv and metrics.csv.
-Generates 3 output files:
-  - eval_yolo.png
-  - eval_pure_vision.png
-  - eval_compare.png  (side-by-side comparison)
+Each panel is saved as a separate PNG file.
+
+Output per method (e.g. YOLO):
+  eval_yolo_lane_center.png
+  eval_yolo_lateral_error_time.png
+  eval_yolo_lateral_error_dist.png
+  eval_yolo_detection_rate.png
+  eval_yolo_confidence.png        (YOLO only) / eval_yolo_fps.png (others)
+  eval_yolo_lane_stability.png
+
+Plus comparison plots:
+  eval_compare_lane_center.png
+  eval_compare_lateral_error_time.png
+  eval_compare_lateral_error_dist.png
+  eval_compare_detection_rate.png
+  eval_compare_fps.png
+  eval_compare_lane_stability.png
 
 Usage:
     python3 analysis/plot_perception.py
-    python3 analysis/plot_perception.py --data analysis/results
+    python3 analysis/plot_perception.py --data analysis/results/perception
 """
 import argparse
 import numpy as np
@@ -21,7 +34,7 @@ from pathlib import Path
 WEATHER_ORDER = ['rain', 'clear', 'fog', 'night']
 W_COLORS      = {'rain': '#4C9BE8', 'clear': '#F5A623', 'fog': '#9B9B9B', 'night': '#2C3E50'}
 M_COLORS      = {'YOLO': '#E74C3C', 'Pure Vision': '#2ECC71', 'SCNN': '#9B59B6'}
-BAR_WIDTH     = 0.35
+BAR_WIDTH     = 0.25
 W_IMAGE       = 1600
 BG_COLORS     = {'rain': '#AED6F1', 'clear': '#FAD7A0', 'fog': '#D5DBDB', 'night': '#AEB6BF'}
 W_TXT_CLR     = {'rain': '#1A5276', 'clear': '#784212', 'fog': '#424949', 'night': '#1C2833'}
@@ -50,33 +63,34 @@ def _shade_weather(ax, spans):
                 color=W_TXT_CLR[sp['weather']], transform=ax.get_xaxis_transform(), zorder=5)
 
 
-def _annotate_bar_values(ax, bars, vals, fmt, pad_ratio=0.03, inside_ratio=0.06, y_offset_ratio=0.0):
+def _annotate_bar_values(ax, bars, vals, fmt, pad_ratio=0.03, inside_ratio=0.06):
     y_top = ax.get_ylim()[1] if ax.get_ylim()[1] > 0 else 1.0
     for bar, val in zip(bars, vals):
         if np.isnan(val):
             continue
         if val > 0.6 * y_top:
-            y = val - (inside_ratio * y_top)
-            va = 'top'
+            y, va = val - inside_ratio * y_top, 'top'
         else:
-            y = val + (pad_ratio * y_top)
-            va = 'bottom'
-        y += y_offset_ratio * y_top
+            y, va = val + pad_ratio * y_top, 'bottom'
         ax.text(bar.get_x() + bar.get_width() / 2, y,
                 fmt.format(val), ha='center', va=va, fontsize=9)
 
 
-# ── Per-method figure (time-series + summary bars) ─────────────
+def _save(fig, path):
+    fig.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f'Saved: {path}')
 
-def plot_method_figure(raw, metrics, method, out_path):
+
+# ── Per-method panels ──────────────────────────────────────────────────────────
+
+def _prep_method(raw, metrics, method):
     W = W_IMAGE
     r = raw[raw['method'] == method].copy().sort_values('timestamp_ns')
-    r['t_sec']  = (r['timestamp_ns'] - r['timestamp_ns'].min()) / 1e9
+    r['t_sec'] = (r['timestamp_ns'] - r['timestamp_ns'].min()) / 1e9
     use_gt = 'err_gt' in r.columns and r['err_gt'].notna().any()
     r['err_px'] = r['err_gt'] * W if use_gt else (r['center'] - 0.5) * W
-
     m = metrics[metrics['method'] == method].set_index('weather').reindex(WEATHER_ORDER)
-
     spans = sorted(
         [{'weather': w,
           'start': r[r['weather'] == w]['t_sec'].min(),
@@ -84,34 +98,22 @@ def plot_method_figure(raw, metrics, method, out_path):
          for w in WEATHER_ORDER if not r[r['weather'] == w].empty],
         key=lambda s: s['start']
     )
+    return r, m, spans, use_gt
 
+
+def panel_lane_center(r, m, spans, method, out_path):
+    fig, ax = plt.subplots(figsize=(14, 4))
+    fig.suptitle(f'{method} — Lane Center over Time', fontsize=12, fontweight='bold')
     det    = r[r['detected']]
     missed = r[~r['detected']]
-    weathers = WEATHER_ORDER
-    colors   = [W_COLORS[w] for w in weathers]
-
-    fig = plt.figure(figsize=(14, 17))
-    gs  = fig.add_gridspec(4, 3, height_ratios=[2, 2, 2, 1.8], hspace=0.50, wspace=0.35)
-    ax_ts1  = fig.add_subplot(gs[0, :])
-    ax_ts2  = fig.add_subplot(gs[1, :])
-    ax_box  = fig.add_subplot(gs[2, :])
-    ax_det  = fig.add_subplot(gs[3, 0])
-    ax_c4   = fig.add_subplot(gs[3, 1])
-    ax_stab = fig.add_subplot(gs[3, 2])
-
-    fig.suptitle(f'{method} Lane Detection — Bag Analysis\n(4 weather conditions, 60 s each)',
-                 fontsize=13, fontweight='bold')
-
-    # ── Panel 1: center_norm over time ─────────────────────────
-    ax = ax_ts1
     ax.scatter(det['t_sec'], det['center'], s=2, alpha=0.4, color='steelblue', zorder=2)
     if not missed.empty:
         ax.scatter(missed['t_sec'], [0.5] * len(missed), s=15, alpha=0.5,
                    color='red', marker='x', zorder=3, label='miss')
     ax.axhline(0.5, color='gray', lw=1.2, ls='--', label='ideal center = 0.5', zorder=1)
     ax.set_ylim(0.3, 0.7)
+    ax.set_xlabel('Time (s)')
     ax.set_ylabel('Lane Center (normalized)')
-    ax.set_title('Lane Center over Time  (x = miss)')
     ax.legend(fontsize=8, loc='upper right')
     for sp in spans:
         w = sp['weather']
@@ -120,9 +122,17 @@ def plot_method_figure(raw, metrics, method, out_path):
             ax.text(mid, 0.31, f'det={m.loc[w,"det_rate_%"]:.0f}%',
                     ha='center', va='bottom', fontsize=8, color=W_TXT_CLR[w])
     _shade_weather(ax, spans)
+    plt.tight_layout()
+    _save(fig, out_path)
 
-    # ── Panel 2: lateral error over time ───────────────────────
-    ax = ax_ts2
+
+def panel_lateral_error_time(r, spans, use_gt, method, out_path):
+    W = W_IMAGE
+    fig, ax = plt.subplots(figsize=(14, 4))
+    err_title = 'GT' if use_gt else 'Lane Center'
+    fig.suptitle(f'{method} — Lateral Error over Time (ref={err_title})',
+                 fontsize=12, fontweight='bold')
+    det = r[r['detected']]
     legend_handles = []
     for w in WEATHER_ORDER:
         wd = det[det['weather'] == w]
@@ -135,14 +145,20 @@ def plot_method_figure(raw, metrics, method, out_path):
         )
     ax.axhline(0, color='gray', lw=1.2, ls='--', zorder=1)
     legend_handles.append(plt.Line2D([0], [0], color='gray', ls='--', label='ideal error = 0'))
+    ax.set_xlabel('Time (s)')
     ax.set_ylabel(f'Lateral Error (px,  W={W})')
-    err_title = 'GT' if use_gt else 'Lane Center'
-    ax.set_title(f'Lateral Error from {err_title}  (pixels, W={W})')
     ax.legend(handles=legend_handles, fontsize=8, loc='lower right')
     _shade_weather(ax, spans)
+    plt.tight_layout()
+    _save(fig, out_path)
 
-    # ── Panel 3: boxplot per weather ───────────────────────────
-    ax = ax_box
+
+def panel_lateral_error_dist(r, use_gt, method, out_path):
+    fig, ax = plt.subplots(figsize=(10, 5))
+    err_title = 'GT' if use_gt else 'Lane Center'
+    fig.suptitle(f'{method} — Lateral Error Distribution per Weather\n(ref={err_title})',
+                 fontsize=12, fontweight='bold')
+    det = r[r['detected']]
     box_data, box_labels, box_colors = [], [], []
     for w in WEATHER_ORDER:
         wd = det[det['weather'] == w]
@@ -151,7 +167,6 @@ def plot_method_figure(raw, metrics, method, out_path):
         box_data.append(wd['err_px'].values)
         box_labels.append(w.capitalize())
         box_colors.append(W_COLORS[w])
-
     bp = ax.boxplot(box_data, patch_artist=True,
                     medianprops=dict(color='black', linewidth=2),
                     flierprops=dict(marker='.', markersize=2, alpha=0.3))
@@ -160,96 +175,118 @@ def plot_method_figure(raw, metrics, method, out_path):
         patch.set_alpha(0.7)
     ax.axhline(0, color='gray', lw=1.2, ls='--', label='ideal = 0 px', zorder=1)
     for i, (w, data) in enumerate(zip(WEATHER_ORDER, box_data)):
-        total    = len(r[r['weather'] == w])
-        det_pct  = len(det[det['weather'] == w]) / total * 100 if total else 0
-        med      = float(np.median(data))
-        std      = float(np.std(data))
-        ymin, _  = ax.get_ylim()
+        total   = len(r[r['weather'] == w])
+        det_pct = len(det[det['weather'] == w]) / total * 100 if total else 0
+        med = float(np.median(data))
+        std = float(np.std(data))
+        ymin, _ = ax.get_ylim()
         ax.text(i + 1, ymin + abs(ymin) * 0.04,
                 f'med={med:.0f}px\nstd={std:.1f}\ndet={det_pct:.0f}%',
                 ha='center', va='bottom', fontsize=8,
                 bbox=dict(boxstyle='round,pad=0.2', fc='white', alpha=0.75))
     ax.set_xticklabels(box_labels)
     ax.set_ylabel('Lateral Error (px)')
-    err_title = 'GT' if use_gt else 'Lane Center'
-    ax.set_title(f'Lateral Error Distribution per Weather  (box = IQR, line = median)\n(ref={err_title})')
+    ax.set_title('box = IQR, line = median', fontsize=9, style='italic')
     ax.legend(fontsize=8)
+    ax.yaxis.grid(True, linestyle='--', alpha=0.4)
+    plt.tight_layout()
+    _save(fig, out_path)
 
-    # ── Panel 4: Detection rate ─────────────────────────────────
-    ax = ax_det
+
+def panel_detection_rate(m, method, out_path):
+    weathers = WEATHER_ORDER
+    colors   = [W_COLORS[w] for w in weathers]
+    fig, ax  = plt.subplots(figsize=(7, 5))
+    fig.suptitle(f'{method} — Detection Rate', fontsize=12, fontweight='bold')
     vals = m['det_rate_%'].values.astype(float)
     bars = ax.bar(weathers, vals, color=colors, edgecolor='black', linewidth=0.8)
     ax.set_ylim(0, 115)
     ax.axhline(100, color='green', lw=1, ls='--', alpha=0.4)
     ax.set_ylabel('Detection Rate (%)')
-    ax.set_title('Detection Rate')
+    ax.yaxis.grid(True, linestyle='--', alpha=0.4)
+    ax.set_axisbelow(True)
     _annotate_bar_values(ax, bars, vals, '{:.0f}%')
-    ax.tick_params(axis='x', labelsize=8)
+    plt.tight_layout()
+    _save(fig, out_path)
 
-    # ── Panel 5: Confidence (YOLO only) or FPS (Pure Vision / SCNN) ────────
-    ax = ax_c4
+
+def panel_confidence_or_fps(r, m, method, out_path):
+    weathers = WEATHER_ORDER
+    colors   = [W_COLORS[w] for w in weathers]
+    fig, ax  = plt.subplots(figsize=(7, 5))
+    det = r[r['detected']]
     if method == 'YOLO':
         conf_vals = []
         for w in weathers:
             d = det[(det['weather'] == w) & (det['confidence'] > 0)]['confidence'].values
             conf_vals.append(float(np.mean(d)) if len(d) else np.nan)
-        bars = ax.bar(weathers, conf_vals, color=colors, edgecolor='black', linewidth=0.8)
+        vals = np.array(conf_vals, dtype=float)
+        bars = ax.bar(weathers, vals, color=colors, edgecolor='black', linewidth=0.8)
         ax.set_ylim(0, 1.1)
         ax.set_ylabel('Mean Confidence')
-        ax.set_title('Detection Confidence')
-        _annotate_bar_values(ax, bars, np.array(conf_vals, dtype=float), '{:.3f}', pad_ratio=0.01, inside_ratio=0.03)
+        fig.suptitle(f'{method} — Detection Confidence', fontsize=12, fontweight='bold')
+        _annotate_bar_values(ax, bars, vals, '{:.3f}', pad_ratio=0.01, inside_ratio=0.03)
     else:
-        fps_vals = m['fps'].values.astype(float)
-        bars = ax.bar(weathers, fps_vals, color=colors, edgecolor='black', linewidth=0.8)
+        vals = m['fps'].values.astype(float)
+        bars = ax.bar(weathers, vals, color=colors, edgecolor='black', linewidth=0.8)
         ax.set_ylabel('FPS')
-        ax.set_title('Frames per Second')
-        _annotate_bar_values(ax, bars, fps_vals, '{:.1f}', pad_ratio=0.02, inside_ratio=0.04)
-    ax.tick_params(axis='x', labelsize=8)
+        fig.suptitle(f'{method} — Frames per Second', fontsize=12, fontweight='bold')
+        _annotate_bar_values(ax, bars, vals, '{:.1f}', pad_ratio=0.02, inside_ratio=0.04)
+    ax.yaxis.grid(True, linestyle='--', alpha=0.4)
+    ax.set_axisbelow(True)
+    plt.tight_layout()
+    _save(fig, out_path)
 
-    # ── Panel 6: Lane position stability (lx_std, rx_std) ──────
-    ax = ax_stab
-    x6      = np.arange(len(weathers))
+
+def panel_lane_stability(m, method, out_path):
+    weathers = WEATHER_ORDER
+    x        = np.arange(len(weathers))
+    w6       = 0.35
+    fig, ax  = plt.subplots(figsize=(7, 5))
+    fig.suptitle(f'{method} — Lane Stability (lx_std, rx_std)\nlower = more stable',
+                 fontsize=12, fontweight='bold')
     lx_stds = m['lx_std'].values.astype(float)
     rx_stds = m['rx_std'].values.astype(float)
-    w6      = 0.35
-    bars_lx = ax.bar(x6 - w6 / 2, lx_stds, w6, label='lx_std',
+    bars_lx = ax.bar(x - w6 / 2, lx_stds, w6, label='lx_std',
                      color='#3498DB', edgecolor='black', linewidth=0.8)
-    bars_rx = ax.bar(x6 + w6 / 2, rx_stds, w6, label='rx_std',
+    bars_rx = ax.bar(x + w6 / 2, rx_stds, w6, label='rx_std',
                      color='#E67E22', edgecolor='black', linewidth=0.8)
-    _annotate_bar_values(
-        ax,
-        list(bars_lx) + list(bars_rx),
-        np.array(list(lx_stds) + list(rx_stds), dtype=float),
-        '{:.1f}',
-        pad_ratio=0.03,
-        inside_ratio=0.06,
-    )
-    ax.set_xticks(x6)
-    ax.set_xticklabels(weathers, fontsize=8)
+    _annotate_bar_values(ax, list(bars_lx) + list(bars_rx),
+                         np.concatenate([lx_stds, rx_stds]), '{:.1f}')
+    ax.set_xticks(x)
+    ax.set_xticklabels(weathers)
     ax.set_ylabel('Std (pixels)')
-    ax.set_title('Lane Stability  (lx_std, rx_std)\nlower = more stable')
-    ax.legend(fontsize=8)
+    ax.yaxis.grid(True, linestyle='--', alpha=0.4)
+    ax.set_axisbelow(True)
+    ax.legend(fontsize=9)
+    plt.tight_layout()
+    _save(fig, out_path)
 
-    plt.savefig(out_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f'Saved: {out_path}')
+
+def plot_method_figure(raw, metrics, method, out_dir: Path):
+    slug = method.lower().replace(' ', '_')
+    r, m, spans, use_gt = _prep_method(raw, metrics, method)
+
+    panel_lateral_error_time(r, spans, use_gt, method,
+                             out_dir / f'eval_{slug}_lateral_error_time.png')
+    panel_detection_rate(m, method,
+                         out_dir / f'eval_{slug}_detection_rate.png')
+    panel_confidence_or_fps(r, m, method,
+                            out_dir / f'eval_{slug}_confidence.png' if method == 'YOLO'
+                            else out_dir / f'eval_{slug}_fps.png')
+    panel_lane_stability(m, method,
+                         out_dir / f'eval_{slug}_lane_stability.png')
 
 
-# ── Comparison figure (time-series style) ─────────────────────
+# ── Comparison panels ──────────────────────────────────────────────────────────
 
-def plot_compare_figure(raw, metrics, out_path):
-    W       = W_IMAGE
-    _order  = ['YOLO', 'Pure Vision', 'SCNN']
-    methods = [m for m in _order if m in raw['method'].unique()]
-
-    # Align both methods to a common time axis (YOLO as reference)
+def _prep_compare(raw):
+    W = W_IMAGE
     t0  = raw['timestamp_ns'].min()
     raw = raw.copy()
-    raw['t_sec']  = (raw['timestamp_ns'] - t0) / 1e9
+    raw['t_sec'] = (raw['timestamp_ns'] - t0) / 1e9
     use_gt = 'err_gt' in raw.columns and raw['err_gt'].notna().any()
     raw['err_px'] = raw['err_gt'] * W if use_gt else (raw['center'] - 0.5) * W
-
-    # Weather spans from YOLO (both share same bag)
     ref = raw[raw['method'] == 'YOLO'].copy()
     spans = sorted(
         [{'weather': w,
@@ -258,180 +295,198 @@ def plot_compare_figure(raw, metrics, out_path):
          for w in WEATHER_ORDER if not ref[ref['weather'] == w].empty],
         key=lambda s: s['start']
     )
+    _order  = ['YOLO', 'Pure Vision', 'SCNN']
+    methods = [m for m in _order if m in raw['method'].unique()]
+    return raw, spans, use_gt, methods
 
-    x = np.arange(len(WEATHER_ORDER))
 
-    fig = plt.figure(figsize=(14, 17))
-    gs  = fig.add_gridspec(4, 3, height_ratios=[2, 2, 2, 1.8], hspace=0.50, wspace=0.35)
-    ax_ts1  = fig.add_subplot(gs[0, :])
-    ax_ts2  = fig.add_subplot(gs[1, :])
-    ax_box  = fig.add_subplot(gs[2, :])
-    ax_det  = fig.add_subplot(gs[3, 0])
-    ax_fps  = fig.add_subplot(gs[3, 1])
-    ax_stab = fig.add_subplot(gs[3, 2])
-
-    fig.suptitle('Perception Comparison — ' + ' vs '.join(methods) + '\n(4 weather conditions, 60 s each)',
-                 fontsize=13, fontweight='bold')
-
-    # ── Panel 1: center_norm over time (both methods) ──────────
-    ax = ax_ts1
+def compare_lane_center(raw, spans, methods, out_path):
+    fig, ax = plt.subplots(figsize=(14, 4))
+    fig.suptitle('Comparison — Lane Center over Time', fontsize=12, fontweight='bold')
     for method in methods:
         det = raw[(raw['method'] == method) & raw['detected']]
         ax.scatter(det['t_sec'], det['center'], s=2, alpha=0.35,
                    color=M_COLORS[method], label=method, zorder=2)
     ax.axhline(0.5, color='gray', lw=1.2, ls='--', label='ideal = 0.5', zorder=1)
     ax.set_ylim(0.3, 0.7)
+    ax.set_xlabel('Time (s)')
     ax.set_ylabel('Lane Center (normalized)')
-    ax.set_title('Lane Center over Time')
     ax.legend(fontsize=8, loc='upper right', markerscale=4)
     _shade_weather(ax, spans)
+    plt.tight_layout()
+    _save(fig, out_path)
 
-    # ── Panel 2: lateral error over time (both methods) ────────
-    ax = ax_ts2
+
+def compare_lateral_error_time(raw, spans, use_gt, methods, out_path):
+    W = W_IMAGE
+    err_title = 'GT' if use_gt else 'Lane Center'
+    fig, ax = plt.subplots(figsize=(14, 4))
+    fig.suptitle(f'Comparison — Lateral Error over Time (ref={err_title})',
+                 fontsize=12, fontweight='bold')
     for method in methods:
         det = raw[(raw['method'] == method) & raw['detected']]
-        for w in WEATHER_ORDER:
-            wd = det[det['weather'] == w]
-            if wd.empty:
-                continue
-            ax.scatter(wd['t_sec'], wd['err_px'], s=2, alpha=0.30,
-                       color=M_COLORS[method], zorder=2)
+        ax.scatter(det['t_sec'], det['err_px'], s=2, alpha=0.30,
+                   color=M_COLORS[method], zorder=2)
     ax.axhline(0, color='gray', lw=1.2, ls='--', zorder=1)
     legend_handles = [
         plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=M_COLORS[m],
                    markersize=7, label=m)
         for m in methods
     ] + [plt.Line2D([0], [0], color='gray', ls='--', label='ideal = 0')]
+    ax.set_xlabel('Time (s)')
     ax.set_ylabel(f'Lateral Error (px,  W={W})')
-    err_title = 'GT' if use_gt else 'Lane Center'
-    ax.set_title(f'Lateral Error over Time  (pixels, W={W}, ref={err_title})')
     ax.legend(handles=legend_handles, fontsize=8, loc='lower right')
     _shade_weather(ax, spans)
+    plt.tight_layout()
+    _save(fig, out_path)
 
-    # ── Panel 3: boxplot per weather — both methods side by side
-    ax = ax_box
+
+def compare_lateral_error_dist(raw, use_gt, methods, out_path):
+    err_title = 'GT' if use_gt else 'Lane Center'
+    fig, ax   = plt.subplots(figsize=(10, 5))
+    fig.suptitle(f'Comparison — Lateral Error Distribution (ref={err_title})',
+                 fontsize=12, fontweight='bold')
     n_methods = len(methods)
-    positions_all = []
-    labels_all    = []
-    colors_all    = []
-    box_data_all  = []
-    tick_pos      = []
-    tick_lbl      = []
-
+    positions_all, colors_all, box_data_all = [], [], []
+    tick_pos, tick_lbl = [], []
     for wi, w in enumerate(WEATHER_ORDER):
         group_center = wi * (n_methods + 1)
         tick_pos.append(group_center + (n_methods - 1) / 2)
         tick_lbl.append(w.capitalize())
         for mi, method in enumerate(methods):
-            det  = raw[(raw['method'] == method) & raw['detected'] & (raw['weather'] == w)]
-            pos  = group_center + mi
-            positions_all.append(pos)
+            det = raw[(raw['method'] == method) & raw['detected'] & (raw['weather'] == w)]
+            positions_all.append(group_center + mi)
             colors_all.append(M_COLORS[method])
             box_data_all.append(det['err_px'].values if not det.empty else np.array([]))
-            labels_all.append(method)
-
-    bp = ax.boxplot(box_data_all, positions=positions_all, patch_artist=True,
-                    widths=0.7,
+    bp = ax.boxplot(box_data_all, positions=positions_all, patch_artist=True, widths=0.7,
                     medianprops=dict(color='black', linewidth=2),
                     flierprops=dict(marker='.', markersize=2, alpha=0.3))
     for patch, c in zip(bp['boxes'], colors_all):
         patch.set_facecolor(c)
         patch.set_alpha(0.7)
-
     ax.axhline(0, color='gray', lw=1.2, ls='--', label='ideal = 0 px', zorder=1)
     ax.set_xticks(tick_pos)
     ax.set_xticklabels(tick_lbl)
     ax.set_ylabel('Lateral Error (px)')
-    err_title = 'GT' if use_gt else 'Lane Center'
-    ax.set_title(f'Lateral Error Distribution per Weather  (box = IQR, line = median)\n(ref={err_title})')
+    ax.set_title('box = IQR, line = median', fontsize=9, style='italic')
     legend_handles = [plt.matplotlib.patches.Patch(facecolor=M_COLORS[m], label=m)
                       for m in methods]
     ax.legend(handles=legend_handles, fontsize=8)
+    ax.yaxis.grid(True, linestyle='--', alpha=0.4)
+    plt.tight_layout()
+    _save(fig, out_path)
 
-    n_m  = len(methods)
-    bw   = BAR_WIDTH
-    offsets_m = [((i - (n_m - 1) / 2) * bw) for i in range(n_m)]
 
-    # ── Panel 4: Detection rate comparison ─────────────────────
-    ax = ax_det
+def compare_detection_rate(metrics, methods, out_path):
+    x   = np.arange(len(WEATHER_ORDER))
+    n_m = len(methods)
+    offsets = [((i - (n_m - 1) / 2) * BAR_WIDTH) for i in range(n_m)]
+    fig, ax = plt.subplots(figsize=(9, 5))
+    fig.suptitle('Comparison — Detection Rate', fontsize=12, fontweight='bold')
     for i, method in enumerate(methods):
         m    = metrics[metrics['method'] == method].set_index('weather').reindex(WEATHER_ORDER)
         vals = m['det_rate_%'].values.astype(float)
-        bars = ax.bar(x + offsets_m[i], vals, bw,
-                      label=method, color=M_COLORS.get(method, '#888'), edgecolor='black', linewidth=0.7)
-        y_off = (i - (n_m - 1) / 2) * 0.06
-        _annotate_bar_values(ax, bars, vals, '{:.0f}%', pad_ratio=0.02, inside_ratio=0.05, y_offset_ratio=y_off)
+        bars = ax.bar(x + offsets[i], vals, BAR_WIDTH,
+                      label=method, color=M_COLORS.get(method, '#888'),
+                      edgecolor='black', linewidth=0.7)
+        _annotate_bar_values(ax, bars, vals, '{:.0f}%', pad_ratio=0.02, inside_ratio=0.05)
     ax.set_xticks(x)
-    ax.set_xticklabels(WEATHER_ORDER, fontsize=8)
+    ax.set_xticklabels(WEATHER_ORDER)
     ax.set_ylim(0, 115)
     ax.axhline(100, color='green', lw=1, ls='--', alpha=0.4)
     ax.set_ylabel('Detection Rate (%)')
-    ax.set_title('Detection Rate')
-    ax.legend(fontsize=7)
+    ax.yaxis.grid(True, linestyle='--', alpha=0.4)
+    ax.set_axisbelow(True)
+    ax.legend(fontsize=9)
+    plt.tight_layout()
+    _save(fig, out_path)
 
-    # ── Panel 5: FPS comparison ─────────────────────────────────
-    ax = ax_fps
+
+def compare_fps(metrics, methods, out_path):
+    x   = np.arange(len(WEATHER_ORDER))
+    n_m = len(methods)
+    offsets = [((i - (n_m - 1) / 2) * BAR_WIDTH) for i in range(n_m)]
+    fig, ax = plt.subplots(figsize=(9, 5))
+    fig.suptitle('Comparison — Frames per Second', fontsize=12, fontweight='bold')
     for i, method in enumerate(methods):
         m    = metrics[metrics['method'] == method].set_index('weather').reindex(WEATHER_ORDER)
         vals = m['fps'].values.astype(float)
-        bars = ax.bar(x + offsets_m[i], vals, bw,
-                      label=method, color=M_COLORS.get(method, '#888'), edgecolor='black', linewidth=0.7)
-        y_off = (i - (n_m - 1) / 2) * 0.06
-        _annotate_bar_values(ax, bars, vals, '{:.1f}', pad_ratio=0.02, inside_ratio=0.04, y_offset_ratio=y_off)
+        bars = ax.bar(x + offsets[i], vals, BAR_WIDTH,
+                      label=method, color=M_COLORS.get(method, '#888'),
+                      edgecolor='black', linewidth=0.7)
+        _annotate_bar_values(ax, bars, vals, '{:.1f}', pad_ratio=0.02, inside_ratio=0.04)
     ax.set_xticks(x)
-    ax.set_xticklabels(WEATHER_ORDER, fontsize=8)
+    ax.set_xticklabels(WEATHER_ORDER)
     ax.set_ylabel('FPS')
-    ax.set_title('Frames per Second')
-    ax.legend(fontsize=7)
+    ax.yaxis.grid(True, linestyle='--', alpha=0.4)
+    ax.set_axisbelow(True)
+    ax.legend(fontsize=9)
+    plt.tight_layout()
+    _save(fig, out_path)
 
-    # ── Panel 6: lx_std / rx_std comparison (2 bars per method per weather)
-    ax   = ax_stab
-    w6   = bw / 2
-    _lx_shades = {'YOLO': '#C0392B', 'Pure Vision': '#1E8449'}
-    _rx_shades = {'YOLO': '#E74C3C', 'Pure Vision': '#2ECC71'}
-    n_bars  = 2 * n_m
-    bar_w6  = 0.8 / n_bars
-    base_off = -(n_bars - 1) / 2 * bar_w6
+
+def compare_lane_stability(metrics, methods, out_path):
+    x    = np.arange(len(WEATHER_ORDER))
+    n_m  = len(methods)
+    n_bars = 2 * n_m
+    bar_w  = 0.8 / n_bars
+    base   = -(n_bars - 1) / 2 * bar_w
+    _lx = {'YOLO': '#C0392B', 'Pure Vision': '#1E8449', 'SCNN': '#6C3483'}
+    _rx = {'YOLO': '#E74C3C', 'Pure Vision': '#2ECC71', 'SCNN': '#9B59B6'}
+    fig, ax = plt.subplots(figsize=(9, 5))
+    fig.suptitle('Comparison — Lane Stability (lx_std, rx_std)\nlower = more stable',
+                 fontsize=12, fontweight='bold')
     for i, method in enumerate(methods):
-        off_lx = base_off + (2 * i) * bar_w6
-        off_rx = base_off + (2 * i + 1) * bar_w6
         m = metrics[metrics['method'] == method].set_index('weather').reindex(WEATHER_ORDER)
-        lc = _lx_shades.get(method, '#555')
-        rc = _rx_shades.get(method, '#888')
-        ax.bar(x + off_lx, m['lx_std'].values.astype(float), bar_w6,
-               label=f'{method} lx', color=lc, edgecolor='black', linewidth=0.6)
-        ax.bar(x + off_rx, m['rx_std'].values.astype(float), bar_w6,
-               label=f'{method} rx', color=rc, edgecolor='black', linewidth=0.6)
+        ax.bar(x + base + (2 * i) * bar_w, m['lx_std'].values.astype(float), bar_w,
+               label=f'{method} lx', color=_lx.get(method, '#555'),
+               edgecolor='black', linewidth=0.6)
+        ax.bar(x + base + (2 * i + 1) * bar_w, m['rx_std'].values.astype(float), bar_w,
+               label=f'{method} rx', color=_rx.get(method, '#888'),
+               edgecolor='black', linewidth=0.6)
     ax.set_xticks(x)
-    ax.set_xticklabels(WEATHER_ORDER, fontsize=8)
+    ax.set_xticklabels(WEATHER_ORDER)
     ax.set_ylabel('Std (pixels)')
-    ax.set_title('Lane Stability  (lx_std, rx_std)\nlower = more stable')
-    ax.legend(fontsize=6, ncol=2)
+    ax.yaxis.grid(True, linestyle='--', alpha=0.4)
+    ax.set_axisbelow(True)
+    ax.legend(fontsize=7, ncol=2)
+    plt.tight_layout()
+    _save(fig, out_path)
 
-    plt.savefig(out_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f'Saved: {out_path}')
+
+def plot_compare_figures(raw, metrics, out_dir: Path):
+    raw, spans, use_gt, methods = _prep_compare(raw)
+
+    compare_lateral_error_time(raw, spans, use_gt, methods,
+                               out_dir / 'eval_compare_lateral_error_time.png')
+    compare_detection_rate(metrics, methods,
+                           out_dir / 'eval_compare_detection_rate.png')
+    compare_fps(metrics, methods,
+                out_dir / 'eval_compare_fps.png')
+    compare_lane_stability(metrics, methods,
+                           out_dir / 'eval_compare_lane_stability.png')
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', default='/home/peeradon/lka-carla-yolo/analysis/results')
+    parser.add_argument('--data', default='/home/peeradon/lka-carla-yolo/analysis/results/perception')
     args = parser.parse_args()
 
     data_dir = Path(args.data)
     raw, metrics = load(data_dir)
-    print(f'Loaded {len(raw)} frames')
+    print(f'Loaded {len(raw)} frames, {len(metrics)} metric rows')
     print(metrics[['method', 'weather', 'det_rate_%', 'err_mean', 'fps']].to_string(index=False))
 
-    _fname = {
-        'YOLO':        'eval_yolo.png',
-        'Pure Vision': 'eval_pure_vision.png',
-        'SCNN':        'eval_scnn.png',
-    }
-    for method in raw['method'].unique():
-        if method in _fname:
-            plot_method_figure(raw, metrics, method, data_dir / _fname[method])
-    plot_compare_figure(raw, metrics, data_dir / 'eval_compare.png')
+    slug_map = {'YOLO': 'yolo', 'Pure Vision': 'pure_vision', 'SCNN': 'scnn'}
+    for method in ['YOLO', 'Pure Vision', 'SCNN']:
+        if method in raw['method'].unique():
+            sub = data_dir / slug_map[method]
+            sub.mkdir(exist_ok=True)
+            plot_method_figure(raw, metrics, method, sub)
+
+    compare_dir = data_dir / 'compare'
+    compare_dir.mkdir(exist_ok=True)
+    plot_compare_figures(raw, metrics, compare_dir)
 
 
 if __name__ == '__main__':

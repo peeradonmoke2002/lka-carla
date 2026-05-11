@@ -155,6 +155,14 @@ def compute_metrics(lane_df, cte_df, ctrl_df, odom_df):
         metrics['drop_rate_pct'] = float('nan')
         metrics['total_frames']  = 0
 
+    # ── Lane stability (center jitter while driving) ───────────────
+    if not lane_df.empty:
+        detected_centers = lane_df[lane_df['detected']]['center'].values
+        metrics['center_diff_std'] = round(float(np.std(np.diff(detected_centers))), 4) \
+            if len(detected_centers) > 1 else float('nan')
+    else:
+        metrics['center_diff_std'] = float('nan')
+
     # ── Speed ──────────────────────────────────────────────────────
     if not odom_df.empty:
         metrics['mean_speed_mps'] = round(float(odom_df['speed_mps'].mean()), 3)
@@ -315,6 +323,64 @@ def plot_trajectories(raw_data: list, out_dir: Path):
     plt.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close()
     print(f'Trajectory plot saved: {out_path}')
+
+
+def plot_cte_trajectory(raw_data: list, out_dir: Path):
+    """Single-row CTE plot — mean ± 1 std band per method per weather."""
+    weathers = VALID_WEATHERS
+    methods  = VALID_METHODS
+    n        = len(weathers)
+
+    t_end = min(
+        (entry['cte_df']['ts'].values[-1] - entry['cte_df']['ts'].values[0]) / 1e9
+        for entry in raw_data if not entry['cte_df'].empty
+    )
+    t_grid = np.linspace(0, t_end, 500)
+    kernel = np.ones(20) / 20
+
+    fig, axes = plt.subplots(1, n, figsize=(5 * n, 4), sharey=True)
+    fig.suptitle('CTE over Time — Mean ± 1 std over Repeats',
+                 fontsize=13, fontweight='bold')
+
+    for col, weather in enumerate(weathers):
+        ax = axes[col]
+        ax.set_title(weather.capitalize(), fontsize=12)
+        ax.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax.yaxis.grid(True, linestyle='--', alpha=0.4)
+        ax.set_axisbelow(True)
+        ax.set_xlabel(f'Time (s)  [0 – {t_end:.0f}s]', fontsize=10)
+
+        for method in methods:
+            color      = COLORS.get(method, 'gray')
+            cte_series = []
+            for entry in raw_data:
+                if entry['weather'] != weather or entry['method'] != method:
+                    continue
+                cte_df = entry['cte_df']
+                if cte_df.empty:
+                    continue
+                t0 = cte_df['ts'].values[0]
+                cte_series.append(
+                    ((cte_df['ts'].values - t0) / 1e9, cte_df['cte_m'].values)
+                )
+            if not cte_series:
+                continue
+            mat  = np.stack([np.interp(t_grid, t, v) for t, v in cte_series])
+            mean = np.convolve(mat.mean(axis=0), kernel, mode='same')
+            std  = np.convolve(mat.std(axis=0),  kernel, mode='same')
+            ax.plot(t_grid, mean, color=color, linewidth=1.5,
+                    label=LABELS.get(method, method))
+            ax.fill_between(t_grid, mean - std, mean + std, color=color, alpha=0.2)
+
+        ax.legend(fontsize=9)
+
+    axes[0].set_ylabel('CTE (m)', fontsize=11)
+
+    plt.tight_layout()
+    out_path = out_dir / 'cte_trajectory.png'
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f'CTE trajectory plot saved: {out_path}')
 
 
 def plot_results(df: pd.DataFrame, out_dir: Path):
@@ -563,6 +629,47 @@ def plot_hz_consistency(df: pd.DataFrame, out_dir: Path):
     print(f'Hz consistency plot saved: {out_path}')
 
 
+def plot_lane_stability(df: pd.DataFrame, out_dir: Path):
+    """Grouped bar chart of center_diff_std (lane jitter while driving) per method × weather."""
+    weathers = VALID_WEATHERS
+    methods  = [m for m in VALID_METHODS if m in df['method'].unique()]
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    fig.suptitle('Lane Stability During Driving — lower = better',
+                 fontsize=14, fontweight='bold')
+    ax.set_title('center_diff_std: frame-to-frame jitter of lane center while vehicle moves',
+                 fontsize=9, style='italic', pad=6)
+
+    w = 0.26
+    x = np.arange(len(weathers))
+
+    for i, method in enumerate(methods):
+        vals, errs = [], []
+        for wx in weathers:
+            sub = df[(df['method'] == method) & (df['weather'] == wx)]['center_diff_std'].dropna()
+            vals.append(float(sub.mean()) if len(sub) else float('nan'))
+            errs.append(float(sub.std())  if len(sub) > 1 else 0.0)
+        ax.bar(x + i * w, vals, width=w, yerr=errs, capsize=4,
+               label=LABELS.get(method, method),
+               color=COLORS.get(method, 'gray'),
+               edgecolor='white', linewidth=0.5,
+               error_kw={'linewidth': 1.2, 'ecolor': 'black'})
+
+    ax.set_xticks(x + w)
+    ax.set_xticklabels([wx.capitalize() for wx in weathers], fontsize=12)
+    ax.set_ylabel('center_diff_std (norm)', fontsize=11)
+    ax.yaxis.grid(True, linestyle='--', alpha=0.5)
+    ax.set_axisbelow(True)
+    ax.legend(fontsize=10)
+    ax.set_xlim(-0.2, len(weathers) - 0.2)
+
+    plt.tight_layout()
+    out_path = out_dir / 'lane_stability.png'
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f'Lane stability plot saved: {out_path}')
+
+
 def main():
     parser = argparse.ArgumentParser(description='Controller bag evaluation')
     parser.add_argument('bag_path',
@@ -636,6 +743,7 @@ def main():
         'cte_rmse', 'cte_max', 'cte_p95', 'cte_mean',
         'off_lane_pct', 'drop_rate_pct',
         'steer_jitter', 'steer_std',
+        'center_diff_std',
         'mean_speed_mps', 'max_speed_mps',
     ]
     df = pd.DataFrame(rows)
@@ -658,6 +766,8 @@ def main():
             off_lane_pct_std=('off_lane_pct', 'std'),
             steer_jitter_mean=('steer_jitter', 'mean'),
             steer_jitter_std=('steer_jitter', 'std'),
+            center_diff_std_mean=('center_diff_std', 'mean'),
+            center_diff_std_std=('center_diff_std', 'std'),
         ).reset_index().round(4)
         summary_path = out_dir / 'controller_metrics_summary.csv'
         summary_df.to_csv(summary_path, index=False)
@@ -667,12 +777,16 @@ def main():
 
     save_raw_csv(raw_data, out_dir)
     if len(df) > 1:
-        plot_results(df, out_dir)
-        plot_trajectories(raw_data, out_dir)
-        plot_path_xy(raw_data, out_dir)
-        plot_cte_distribution(raw_data, out_dir)
-        plot_bias_comparison(df, out_dir)
-        plot_hz_consistency(df, out_dir)
+        for sub in ('summary', 'trajectories', 'cte', 'stability', 'hz'):
+            (out_dir / sub).mkdir(exist_ok=True)
+        plot_results(df,           out_dir / 'summary')
+        plot_trajectories(raw_data,     out_dir / 'trajectories')
+        plot_cte_trajectory(raw_data,   out_dir / 'trajectories')
+        plot_path_xy(raw_data,          out_dir / 'trajectories')
+        plot_cte_distribution(raw_data, out_dir / 'cte')
+        plot_bias_comparison(df,   out_dir / 'stability')
+        plot_lane_stability(df,    out_dir / 'stability')
+        plot_hz_consistency(df,    out_dir / 'hz')
 
 
 if __name__ == '__main__':
