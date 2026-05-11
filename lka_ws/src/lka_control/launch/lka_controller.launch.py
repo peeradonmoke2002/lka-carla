@@ -13,6 +13,7 @@ def generate_launch_description():
         DeclareLaunchArgument('ld_velocity_ratio', default_value='2.4',   description='Speed multiplier for lookahead (Autoware default)'),
         DeclareLaunchArgument('max_steer_rad',     default_value='1.22',  description='Max steering angle [rad] (~70°)'),
         DeclareLaunchArgument('throttle',          default_value='0.3',   description='Constant throttle [0,1]'),
+        DeclareLaunchArgument('bias_offset',       default_value='0.0',   description='Lane center bias to subtract (calibrated per trial)'),
 
         Node(
             package='lka_control',
@@ -21,13 +22,14 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 {'use_sim_time': True},
-                {'wheel_base':        LaunchConfiguration('wheel_base')},
-                {'lane_width':        LaunchConfiguration('lane_width')},
-                {'min_lookahead':     LaunchConfiguration('min_lookahead')},
-                {'max_lookahead':     LaunchConfiguration('max_lookahead')},
-                {'ld_velocity_ratio': LaunchConfiguration('ld_velocity_ratio')},
-                {'max_steer_rad':     LaunchConfiguration('max_steer_rad')},
-                {'throttle':          LaunchConfiguration('throttle')},
+                {'wheel_base':           LaunchConfiguration('wheel_base')},
+                {'lane_width':           LaunchConfiguration('lane_width')},
+                {'min_lookahead':        LaunchConfiguration('min_lookahead')},
+                {'max_lookahead':        LaunchConfiguration('max_lookahead')},
+                {'ld_velocity_ratio':    LaunchConfiguration('ld_velocity_ratio')},
+                {'max_steer_rad':        LaunchConfiguration('max_steer_rad')},
+                {'throttle':             LaunchConfiguration('throttle')},
+                {'center_bias_offset':   LaunchConfiguration('bias_offset')},
             ],
         ),
     ])

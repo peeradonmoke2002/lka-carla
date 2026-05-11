@@ -27,6 +27,7 @@ class PurePursuitNode(Node):
         self.declare_parameter('max_steer_rad',     1.2217)
         self.declare_parameter('throttle',          0.3)
         self.declare_parameter('stop_x',          108.0)   # stop when odometry x < this
+        self.declare_parameter('center_bias_offset', 0.0)
 
         self.wheel_base  = self.get_parameter('wheel_base').value
         self.lane_width  = self.get_parameter('lane_width').value
@@ -36,6 +37,7 @@ class PurePursuitNode(Node):
         self.max_steer   = self.get_parameter('max_steer_rad').value
         self.throttle    = self.get_parameter('throttle').value
         self.stop_x      = self.get_parameter('stop_x').value
+        self.center_bias = self.get_parameter('center_bias_offset').value
 
         self.center_norm: float | None = None
         self.speed:  float       = 0.0
@@ -64,13 +66,16 @@ class PurePursuitNode(Node):
             f'L={self.wheel_base}m  lane={self.lane_width}m  '
             f'ld=[{self.ld_min:.1f}, {self.ld_max:.1f}]m  '
             f'ld_k={self.ld_k}  throttle={self.throttle}  '
-            f'stop_x={self.stop_x}'
+            f'stop_x={self.stop_x}  center_bias={self.center_bias:+.4f}'
         )
 
     # ── Callbacks ──────────────────────────────────────────────────────────────
 
     def lane_center_callback(self, msg: LaneCenter):
-        self.center_norm = float(msg.center) if msg.detected else None
+        if msg.detected:
+            self.center_norm = float(msg.center) - self.center_bias
+        else:
+            self.center_norm = None
 
     def odom_callback(self, msg: Odometry):
         vx = msg.twist.twist.linear.x

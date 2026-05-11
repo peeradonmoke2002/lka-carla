@@ -233,6 +233,60 @@ def plot_results(metrics, lane_df, out_dir: Path):
     print(f'Plot saved: {out_path}')
 
 
+METHOD_ORDER  = ['YOLO', 'SCNN', 'Pure Vision']
+METHOD_COLORS = {'YOLO': '#2196F3', 'SCNN': '#4CAF50', 'Pure Vision': '#FF9800'}
+
+
+def plot_hz_consistency(metrics: pd.DataFrame, out_dir: Path):
+    """Grouped bar chart of Hz (fps) per method × weather from perception eval."""
+    weathers = WEATHER_ORDER
+    methods  = [m for m in METHOD_ORDER if m in metrics['method'].unique()]
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    fig.suptitle('Phase 3 — Topic Hz Consistency (Perception Eval)',
+                 fontsize=13, fontweight='bold')
+    ax.set_title('All 3 methods driven by the same camera — Hz should be identical per weather',
+                 fontsize=9, style='italic', pad=6)
+
+    w = 0.25
+    x = np.arange(len(weathers))
+
+    for i, method in enumerate(methods):
+        vals = []
+        for wx in weathers:
+            row = metrics[(metrics['method'] == method) & (metrics['weather'] == wx)]
+            vals.append(float(row['fps'].values[0]) if len(row) else float('nan'))
+        bars = ax.bar(x + i * w, vals, width=w,
+                      label=method, color=METHOD_COLORS.get(method, 'gray'),
+                      edgecolor='white', linewidth=0.5)
+        for bar, v in zip(bars, vals):
+            if not np.isnan(v):
+                ax.text(bar.get_x() + bar.get_width() / 2,
+                        bar.get_height() + 0.15,
+                        f'{v:.1f}', ha='center', va='bottom', fontsize=9)
+
+    ax.set_xticks(x + w)
+    ax.set_xticklabels([wx.capitalize() for wx in weathers], fontsize=12)
+    ax.set_ylabel('Hz (frames per second)', fontsize=11)
+    ax.yaxis.grid(True, linestyle='--', alpha=0.5)
+    ax.set_axisbelow(True)
+    ax.legend(fontsize=10)
+    ax.set_ylim(0, ax.get_ylim()[1] * 1.15)
+
+    # Annotate: same Hz per weather → fair
+    for col, wx in enumerate(weathers):
+        sub = metrics[metrics['weather'] == wx]['fps'].dropna()
+        if len(sub) > 1 and sub.std() < 0.1:
+            ax.text(col + w, 0.5, '✓ same', ha='center', va='bottom',
+                    fontsize=8, color='green')
+
+    plt.tight_layout()
+    out_path = out_dir / 'hz_consistency_perception.png'
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f'Hz consistency plot saved: {out_path}')
+
+
 def main():
     parser = argparse.ArgumentParser(description='Perception bag evaluation')
     parser.add_argument('bag_path', help='Path to ROS2 bag directory')
@@ -274,6 +328,8 @@ def main():
 
     metrics.to_csv(out_dir / 'metrics.csv', index=False)
     print(f'Results saved to {out_dir}')
+
+    plot_hz_consistency(metrics, out_dir)
 
 
 if __name__ == '__main__':

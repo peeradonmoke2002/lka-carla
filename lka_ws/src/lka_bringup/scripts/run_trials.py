@@ -26,6 +26,8 @@ Per-trial sequence:
 """
 
 import argparse
+import collections
+import csv
 import os
 import signal
 import subprocess
@@ -88,6 +90,11 @@ SETTLE_WAIT_S   = 7    # wait after teleport for physics to settle
 RECORDER_INIT_S = 1    # pause after starting recorder
 KILL_WAIT_S     = 8    # seconds to wait for process to die
 
+CALIB_COLLECT_S   = 5.0   # seconds to collect centers for bias estimation
+CALIB_MIN_SAMPLES = 50    # minimum detected frames required for valid bias
+
+CALIB_LOG = ROOT / 'bags' / 'closed_loop' / 'calibration_log.csv'
+
 METHODS  = ['yolo', 'pure_vision', 'scnn']
 WEATHERS = ['rain', 'clear', 'fog', 'night']
 
@@ -104,6 +111,7 @@ class TrialMonitor(Node):
         self._detected:         bool  = False
         self._ctrl_state:       str   = ''
         self._last_lane_ts:     float = 0.0   # wall-clock of last /lka/lane_center msg
+        self._recent_centers: collections.deque = collections.deque(maxlen=200)
 
         self.create_subscription(LaneCenter, '/lka/lane_center',      self._lane_cb,  10)
         self.create_subscription(String,     '/lka/controller/state', self._state_cb, 10)
@@ -112,6 +120,8 @@ class TrialMonitor(Node):
         with self._lock:
             self._detected     = bool(msg.detected)
             self._last_lane_ts = time.monotonic()
+            if msg.detected:
+                self._recent_centers.append(float(msg.center))
 
     def _state_cb(self, msg: String):
         with self._lock:
@@ -131,6 +141,24 @@ class TrialMonitor(Node):
             self._ctrl_state   = ''
             self._detected     = False
             self._last_lane_ts = 0.0
+            self._recent_centers.clear()
+
+    def clear_centers(self):
+        with self._lock:
+            self._recent_centers.clear()
+
+    def calibrate_bias(self, min_samples: int = CALIB_MIN_SAMPLES) -> tuple:
+        """Return (bias, n) where bias = mean(centers) - 0.5, or (None, n) if too few samples."""
+        with self._lock:
+            centers = list(self._recent_centers)
+        n = len(centers)
+        if n < min_samples:
+            return None, n
+        return sum(centers) / n - 0.5, n
+
+    def center_count(self) -> int:
+        with self._lock:
+            return len(self._recent_centers)
 
     def seconds_since_last_lane(self) -> float:
         with self._lock:
@@ -230,23 +258,48 @@ def set_weather(weather: str):
               WEATHER_PRESETS[weather])
 
 
-def start_recorder(method: str, weather: str) -> subprocess.Popen:
+def start_recorder(method: str, weather: str, rep: int) -> subprocess.Popen:
     """Step 4 — start bag recorder, wait briefly for it to initialise."""
     ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-    bag_path = str(ROOT / 'bags' / 'closed_loop' / f'{method}_{weather}_{ts}')
+    bag_path = str(ROOT / 'bags' / 'closed_loop' / f'{method}_{weather}_rep{rep}_{ts}')
     cmd = ('ros2 bag record --output ' + bag_path
            + ' --storage sqlite3 ' + ' '.join(RECORD_TOPICS))
     print(f'  [4-record] bag → {bag_path}', flush=True)
     return _popen(cmd)
 
 
-def start_controller() -> subprocess.Popen:
-    """Step 5 — launch Pure Pursuit controller."""
-    cmd = ('ros2 launch lka_control lka_controller.launch.py '
-           'wheel_base:=3.0046 ld_velocity_ratio:=2.4 '
-           'max_steer_rad:=1.2217 throttle:=0.3')
-    print('  [5-controller] starting — ego will drive ...', flush=True)
+def start_controller(bias_offset: float = 0.0) -> subprocess.Popen:
+    """Step 5 — launch Pure Pursuit controller with calibrated bias."""
+    cmd = (f'ros2 launch lka_control lka_controller.launch.py '
+           f'wheel_base:=3.0046 ld_velocity_ratio:=2.4 '
+           f'max_steer_rad:=1.2217 throttle:=0.3 '
+           f'bias_offset:={bias_offset:.6f}')
+    print(f'  [5-controller] starting — bias_offset={bias_offset:+.4f} ...', flush=True)
     return _popen(cmd)
+
+
+def calibrate_perception_bias(monitor: TrialMonitor, executor) -> float:
+    """Step 2.5 — collect CALIB_COLLECT_S seconds of center samples while stationary, return bias."""
+    print(f'  [2.5-calibrate] collecting {CALIB_COLLECT_S:.0f} s of center samples ...', flush=True)
+    monitor.clear_centers()
+    spin_for(executor, CALIB_COLLECT_S)
+    bias, n = monitor.calibrate_bias()
+    if bias is None:
+        print(f'  [2.5-calibrate] WARNING: only {n} samples (need {CALIB_MIN_SAMPLES}) — using bias=0.0', flush=True)
+        return 0.0
+    print(f'  [2.5-calibrate] bias={bias:+.4f}  (n={n})', flush=True)
+    return bias
+
+
+def _write_calib_log(method: str, weather: str, rep: int, bias: float, n_samples: int):
+    CALIB_LOG.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not CALIB_LOG.exists() or CALIB_LOG.stat().st_size == 0
+    with open(CALIB_LOG, 'a', newline='') as f:
+        w = csv.writer(f)
+        if write_header:
+            w.writerow(['timestamp', 'method', 'weather', 'rep', 'bias_offset', 'samples_used'])
+        w.writerow([datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
+                    method, weather, rep, f'{bias:.6f}', n_samples])
 
 
 def wait_for_stop(monitor: TrialMonitor, executor) -> str:
@@ -281,16 +334,21 @@ def verify_quiet(monitor: TrialMonitor, executor) -> bool:
 
 # ── Trial runner ───────────────────────────────────────────────────────────────
 
-def run_trial(method: str, weather: str, idx: int, total: int,
+def run_trial(method: str, weather: str, rep: int, idx: int, total: int,
               monitor: TrialMonitor, executor, dry_run: bool) -> bool:
-    tag = f'[{idx}/{total}] {method} × {weather}'
+    tag = f'[{idx}/{total}] {method} × {weather}  rep={rep}'
     print(f'\n{"─" * 60}')
     print(f'{tag}')
-    bag = ROOT / 'bags' / 'closed_loop' / f'{method}_{weather}'
-    print(f'  bag → {bag}')
 
     if dry_run:
-        print('  [dry-run] skipping')
+        print(f'  [2-perception] start, wait detected=True')
+        print(f'  [2.5-calibrate] collect {CALIB_COLLECT_S:.0f}s, compute bias')
+        print(f'  [3-weather] set weather')
+        print(f'  [4-record] start recorder  → <method>_<weather>_rep{rep}_<ts>')
+        print(f'  [5-controller] launch Pure Pursuit with bias')
+        print(f'  [6-drive] wait goal_reached or timeout')
+        print(f'  [7-stop] kill controller → recorder → perception')
+        print(f'  [8-verify] check quiet')
         return True
 
     monitor.reset()   # clear goal_reached / detected from previous trial
@@ -298,6 +356,7 @@ def run_trial(method: str, weather: str, idx: int, total: int,
     perception_proc = None
     recorder_proc   = None
     controller_proc = None
+    bias_offset     = 0.0
     try:
         # 2. Perception
         perception_proc = start_perception(method)
@@ -305,15 +364,19 @@ def run_trial(method: str, weather: str, idx: int, total: int,
             print(f'  [2-perception] WARNING: no detected=True after {PERCEPTION_READY_TIMEOUT} s — aborting')
             return False
 
+        # 2.5. Calibrate bias — vehicle is stationary at spawn, perception already running
+        bias_offset = calibrate_perception_bias(monitor, executor)
+        _write_calib_log(method, weather, rep, bias_offset, monitor.center_count())
+
         # 3. Weather
         set_weather(weather)
 
         # 4. Recorder
-        recorder_proc = start_recorder(method, weather)
+        recorder_proc = start_recorder(method, weather, rep)
         spin_for(executor, RECORDER_INIT_S)
 
         # 5. Controller
-        controller_proc = start_controller()
+        controller_proc = start_controller(bias_offset)
 
         # 6. Drive
         stopped_by = wait_for_stop(monitor, executor)
@@ -350,6 +413,8 @@ def main():
                         metavar='METHOD',  help='methods to run (default: all 3)')
     parser.add_argument('--weathers', nargs='+', default=WEATHERS, choices=WEATHERS,
                         metavar='WEATHER', help='weathers to run (default: all 4)')
+    parser.add_argument('--repeats', type=int, default=3,
+                        help='number of repeats per (method × weather) condition (default: 3)')
     parser.add_argument('--skip-respawn', action='store_true',
                         help='do not reset vehicle between trials')
     parser.add_argument('--dry-run', action='store_true',
@@ -376,16 +441,21 @@ def main():
         rclpy.shutdown()
         return
 
-    trials   = [(m, w) for m in args.methods for w in args.weathers]
+    # Outer loop = repeat round so all (method×weather) get rep=1 before any gets rep=2
+    trials   = [(m, w, r + 1) for r in range(args.repeats)
+                               for m in args.methods
+                               for w in args.weathers]
     total    = len(trials)
-    secs_per = TRIAL_TIMEOUT_S + (0 if args.skip_respawn else BRAKE_WAIT_S + SETTLE_WAIT_S + KILL_WAIT_S)
+    secs_per = (TRIAL_TIMEOUT_S + CALIB_COLLECT_S
+                + (0 if args.skip_respawn else BRAKE_WAIT_S + SETTLE_WAIT_S + KILL_WAIT_S))
     eta      = timedelta(seconds=total * secs_per)
 
     print('═' * 60)
     print('  Closed-loop trial runner')
     print(f'  methods   : {args.methods}')
     print(f'  weathers  : {args.weathers}')
-    print(f'  trials    : {total}')
+    print(f'  repeats   : {args.repeats}')
+    print(f'  trials    : {total}  ({args.repeats} × {len(args.methods)} methods × {len(args.weathers)} weathers)')
     print(f'  stop point: controller state=goal_reached  (timeout {TRIAL_TIMEOUT_S} s)')
     print(f'  respawn   : {"OFF" if args.skip_respawn else "ON"}')
     print(f'  dry-run   : {args.dry_run}')
@@ -399,7 +469,7 @@ def main():
         set_weather(first_weather)
 
     try:
-        for i, (method, weather) in enumerate(trials, start=1):
+        for i, (method, weather, rep) in enumerate(trials, start=1):
             # 1. Respawn
             if not args.skip_respawn:
                 if args.dry_run:
@@ -408,7 +478,7 @@ def main():
                     print(f'[{i}/{total}] [1-respawn] resetting vehicle ...')
                     reset_vehicle(executor)
 
-            run_trial(method, weather, i, total, monitor, executor, args.dry_run)
+            run_trial(method, weather, rep, i, total, monitor, executor, args.dry_run)
 
     except KeyboardInterrupt:
         print('\nInterrupted.')
@@ -419,6 +489,7 @@ def main():
     print(f'\n{"═" * 60}')
     print(f'  All {total} trial(s) complete')
     print(f'  bags → {ROOT / "bags" / "closed_loop"}/  ')
+    print(f'  calib log → {CALIB_LOG}')
     print(f'  eval → python3 analysis/eval_controller.py bags/closed_loop/')
     print(f'  done : {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
     print('═' * 60)

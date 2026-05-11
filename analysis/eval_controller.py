@@ -27,22 +27,37 @@ VALID_WEATHERS = ['rain', 'clear', 'fog', 'night']
 COLORS = {
     'yolo': '#2196F3', 'pure_vision': '#FF9800', 'scnn': '#4CAF50',
 }
+LABELS = {'yolo': 'YOLO', 'pure_vision': 'Pure Vision', 'scnn': 'SCNN'}
 OFF_LANE_THRESH_M = 0.10  # |cte_m| beyond which we count as off-lane
 MAX_DT_SEC        = 0.15  # max gap for nearest-neighbour merge
 
 
 def parse_method_weather(bag_dir: Path):
-    """Infer method and weather from directory name.
-    Handles both 'yolo_rain' and 'yolo_rain_20260511_155234' (timestamped)."""
+    """Infer method, weather, and rep from directory name.
+
+    Handles:
+      'yolo_rain'
+      'yolo_rain_20260511_155234'          (old timestamped, rep=1 fallback)
+      'yolo_rain_rep2_20260511_155234'     (new format with explicit rep)
+    Returns (method, weather, rep) or (None, None, None).
+    """
     name = bag_dir.name
     for m in VALID_METHODS:
         if name.startswith(m):
             suffix = name[len(m):].lstrip('_')
-            # strip optional _YYYYMMDD_HHMMSS suffix
             for w in VALID_WEATHERS:
-                if suffix == w or suffix.startswith(w + '_'):
-                    return m, w
-    return None, None
+                if suffix == w:
+                    return m, w, 1
+                if suffix.startswith(w + '_'):
+                    rest = suffix[len(w):].lstrip('_')
+                    rep = 1
+                    if rest.startswith('rep'):
+                        try:
+                            rep = int(rest[3:].split('_')[0])
+                        except ValueError:
+                            pass
+                    return m, w, rep
+    return None, None, None
 
 
 def read_bag(bag_path: str):
@@ -81,7 +96,12 @@ def read_bag(bag_path: str):
             msg = deserialize_message(data, OdomMsg)
             v = msg.twist.twist.linear
             speed = float(np.sqrt(v.x**2 + v.y**2 + v.z**2))
-            odom_rows.append({'ts': ts, 'speed_mps': speed})
+            odom_rows.append({
+                'ts':        ts,
+                'pos_x':     float(msg.pose.pose.position.x),
+                'pos_y':     float(msg.pose.pose.position.y),
+                'speed_mps': speed,
+            })
 
     return (
         pd.DataFrame(lane_rows),
@@ -89,6 +109,13 @@ def read_bag(bag_path: str):
         pd.DataFrame(ctrl_rows),
         pd.DataFrame(odom_rows),
     )
+
+
+def _calc_hz(df: pd.DataFrame) -> float:
+    if len(df) < 2:
+        return float('nan')
+    dur = (df['ts'].max() - df['ts'].min()) / 1e9
+    return round((len(df) - 1) / dur, 2) if dur > 0 else float('nan')
 
 
 def compute_metrics(lane_df, cte_df, ctrl_df, odom_df):
@@ -144,20 +171,27 @@ def compute_metrics(lane_df, cte_df, ctrl_df, odom_df):
     else:
         metrics['duration_s'] = float('nan')
 
+    # ── Hz per topic ───────────────────────────────────────────────
+    metrics['lane_hz'] = _calc_hz(lane_df)
+    metrics['cte_hz']  = _calc_hz(cte_df)
+    metrics['ctrl_hz'] = _calc_hz(ctrl_df)
+    metrics['odom_hz'] = _calc_hz(odom_df)
+
     return metrics
 
 
 def process_bag(bag_dir: Path):
-    method, weather = parse_method_weather(bag_dir)
+    method, weather, rep = parse_method_weather(bag_dir)
     if method is None:
         print(f'  [skip] cannot parse method/weather from: {bag_dir.name}')
         return None, None, None, None, None
 
-    print(f'  {bag_dir.name}  ({method} / {weather})')
+    print(f'  {bag_dir.name}  ({method} / {weather} / rep={rep})')
     lane_df, cte_df, ctrl_df, odom_df = read_bag(str(bag_dir))
     m = compute_metrics(lane_df, cte_df, ctrl_df, odom_df)
     m['method']  = method
     m['weather'] = weather
+    m['rep']     = rep
     m['bag']     = bag_dir.name
     return m, lane_df, cte_df, ctrl_df, odom_df
 
@@ -187,14 +221,15 @@ def save_raw_csv(raw_data: list, out_dir: Path):
         base['time_s']  = (base['ts'] - base['ts'].iloc[0]) / 1e9
         base['method']  = entry['method']
         base['weather'] = entry['weather']
+        base['rep']     = entry.get('rep', 1)
         base['bag']     = entry['bag']
         frames.append(base)
 
     if not frames:
         return
 
-    col_order = ['method', 'weather', 'bag', 'time_s',
-                 'cte_m', 'center', 'detected', 'steer', 'speed_mps']
+    col_order = ['method', 'weather', 'rep', 'bag', 'time_s',
+                 'cte_m', 'center', 'detected', 'steer', 'speed_mps', 'pos_x', 'pos_y']
     df = pd.concat(frames, ignore_index=True)
     df = df[[c for c in col_order if c in df.columns]]
     df = df.round({'time_s': 3, 'cte_m': 5, 'center': 5, 'steer': 5, 'speed_mps': 4})
@@ -205,51 +240,75 @@ def save_raw_csv(raw_data: list, out_dir: Path):
 
 
 def plot_trajectories(raw_data: list, out_dir: Path):
-    """Time-series CTE and lane center for each weather, one line per method."""
+    """3-row plot: CTE / Speed / Position-X — mean ± 1 std band per method per weather."""
     weathers = VALID_WEATHERS
-    n = len(weathers)
+    methods  = VALID_METHODS
+    n        = len(weathers)
 
-    fig, axes = plt.subplots(2, n, figsize=(5 * n, 8), sharex='col')
-    fig.suptitle('Controller Trajectories — CTE and Lane Center Over Time',
+    fig, axes = plt.subplots(3, n, figsize=(5 * n, 10), sharex=True)
+    fig.suptitle('Trajectory Profiles — Mean ± 1 std over Repeats',
                  fontsize=13, fontweight='bold')
 
+    # Global minimum duration across ALL weathers × methods × reps
+    t_end = min(
+        (entry['cte_df']['ts'].values[-1] - entry['cte_df']['ts'].values[0]) / 1e9
+        for entry in raw_data if not entry['cte_df'].empty
+    )
+    t_grid = np.linspace(0, t_end, 500)
+    kernel = np.ones(20) / 20   # ~1.6s rolling average
+
     for col, weather in enumerate(weathers):
-        ax_cte  = axes[0, col]
-        ax_lane = axes[1, col]
+        ax_cte   = axes[0, col]
+        ax_spd   = axes[1, col]
+        ax_posx  = axes[2, col]
 
         ax_cte.set_title(weather, fontsize=11)
         ax_cte.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
-        ax_cte.axhline( OFF_LANE_THRESH_M, color='red', linewidth=0.7, linestyle=':')
-        ax_cte.axhline(-OFF_LANE_THRESH_M, color='red', linewidth=0.7, linestyle=':',
-                       label=f'±{OFF_LANE_THRESH_M}m threshold')
-        ax_lane.axhline(0.5, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
 
-        for entry in raw_data:
-            if entry['weather'] != weather:
-                continue
-            method = entry['method']
-            color  = COLORS.get(method, 'gray')
-            cte_df  = entry['cte_df']
-            lane_df = entry['lane_df']
+        for method in methods:
+            color = COLORS.get(method, 'gray')
 
-            if not cte_df.empty:
-                t = (cte_df['ts'].values - cte_df['ts'].values[0]) / 1e9
-                ax_cte.plot(t, cte_df['cte_m'].values, color=color,
-                            linewidth=0.9, label=method, alpha=0.85)
+            cte_series  = []
+            spd_series  = []
+            posx_series = []
 
-            if not lane_df.empty:
-                t2 = (lane_df['ts'].values - lane_df['ts'].values[0]) / 1e9
-                centers = lane_df['center'].values.copy().astype(float)
-                centers[~lane_df['detected'].values] = float('nan')
-                ax_lane.plot(t2, centers, color=color,
-                             linewidth=0.9, label=method, alpha=0.85)
+            for entry in raw_data:
+                if entry['weather'] != weather or entry['method'] != method:
+                    continue
+                cte_df  = entry['cte_df']
+                odom_df = entry['odom_df']
+                if cte_df.empty:
+                    continue
+                t0 = cte_df['ts'].values[0]
+                t_cte = (cte_df['ts'].values - t0) / 1e9
+                cte_series.append((t_cte, cte_df['cte_m'].values))
+
+                if not odom_df.empty and 'pos_x' in odom_df.columns:
+                    t_odom = (odom_df['ts'].values - t0) / 1e9
+                    spd_series.append((t_odom, odom_df['speed_mps'].values))
+                    posx_series.append((t_odom, odom_df['pos_x'].values))
+
+            def plot_band(ax, series, refline=None):
+                if not series:
+                    return
+                mat  = np.stack([np.interp(t_grid, t, v) for t, v in series])
+                mean = np.convolve(mat.mean(axis=0), kernel, mode='same')
+                std  = np.convolve(mat.std(axis=0),  kernel, mode='same')
+                ax.plot(t_grid, mean, color=color, linewidth=1.5, label=method)
+                ax.fill_between(t_grid, mean - std, mean + std, color=color, alpha=0.2)
+                if refline is not None:
+                    ax.axhline(refline, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+
+            plot_band(ax_cte,  cte_series)
+            plot_band(ax_spd,  spd_series)
+            plot_band(ax_posx, posx_series)
 
         ax_cte.legend(fontsize=7)
-        ax_lane.legend(fontsize=7)
-        ax_lane.set_xlabel('Time (s)')
+        ax_posx.set_xlabel(f'Time (s)  [0 – {t_end:.0f}s]')
 
     axes[0, 0].set_ylabel('CTE (m)')
-    axes[1, 0].set_ylabel('Lane center (normalised)')
+    axes[1, 0].set_ylabel('Speed (m/s)')
+    axes[2, 0].set_ylabel('Position X (m)')
 
     plt.tight_layout()
     out_path = out_dir / 'trajectories.png'
@@ -262,49 +321,246 @@ def plot_results(df: pd.DataFrame, out_dir: Path):
     weathers = VALID_WEATHERS
     methods  = [m for m in VALID_METHODS if m in df['method'].unique()]
 
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle('Closed-Loop Controller Evaluation', fontsize=14, fontweight='bold')
+    fig, axes = plt.subplots(2, 2, figsize=(16, 11))
+    fig.suptitle('Closed-Loop Controller Evaluation', fontsize=16, fontweight='bold', y=1.01)
+
+    w      = 0.26
+    x      = np.arange(len(weathers))
 
     def grouped_bars(ax, metric, ylabel, title):
-        x    = np.arange(len(weathers))
-        w    = 0.25
-        all_bars = []
         for i, method in enumerate(methods):
-            vals = [
-                df[(df['method'] == method) & (df['weather'] == wx)][metric].values[0]
-                if len(df[(df['method'] == method) & (df['weather'] == wx)]) > 0
-                else float('nan')
-                for wx in weathers
-            ]
-            bars = ax.bar(x + i * w, vals, width=w, label=method,
-                          color=COLORS.get(method, 'gray'), edgecolor='black', linewidth=0.7)
-            all_bars.append((bars, vals))
-        ax.set_xticks(x + w)
-        ax.set_xticklabels(weathers)
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        ax.legend(fontsize=8)
-        # label bars after ylim is finalised
-        y_range = ax.get_ylim()[1] - ax.get_ylim()[0]
-        for bars, vals in all_bars:
-            for bar, v in zip(bars, vals):
-                if np.isnan(v):
-                    continue
-                label_text = '0' if v == 0 else f'{v:.2f}'
-                ax.text(bar.get_x() + bar.get_width() / 2,
-                        bar.get_height() + y_range * 0.01,
-                        label_text, ha='center', va='bottom', fontsize=6, rotation=90)
+            vals, errs = [], []
+            for wx in weathers:
+                sub = df[(df['method'] == method) & (df['weather'] == wx)][metric].dropna()
+                vals.append(float(sub.mean()) if len(sub) else float('nan'))
+                errs.append(float(sub.std())  if len(sub) > 1 else 0.0)
 
-    grouped_bars(axes[0, 0], 'cte_rmse',     'RMSE (m)',        'CTE RMSE — lower = better')
-    grouped_bars(axes[0, 1], 'cte_max',       'Max |CTE| (m)',   'Max |CTE| — lower = better')
-    grouped_bars(axes[1, 0], 'steer_jitter',  'Steer rate std',  'Steering Jitter — lower = smoother')
-    grouped_bars(axes[1, 1], 'off_lane_pct',  '% time',          f'Off-Lane Time (|CTE|>{OFF_LANE_THRESH_M}m)')
+            ax.bar(x + i * w, vals, width=w, yerr=errs, capsize=4,
+                   label=LABELS.get(method, method),
+                   color=COLORS.get(method, 'gray'),
+                   edgecolor='white', linewidth=0.5,
+                   error_kw={'linewidth': 1.2, 'ecolor': 'black'})
+
+        ax.set_xticks(x + w)
+        ax.set_xticklabels([wx.capitalize() for wx in weathers], fontsize=12)
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.set_title(title, fontsize=13, fontweight='bold', pad=8)
+        ax.yaxis.grid(True, linestyle='--', alpha=0.5)
+        ax.set_axisbelow(True)
+        ax.tick_params(axis='y', labelsize=10)
+        ax.set_xlim(-0.2, len(weathers) - 0.2)
+
+    grouped_bars(axes[0, 0], 'cte_rmse',     'RMSE (m)',       'CTE RMSE')
+    grouped_bars(axes[0, 1], 'cte_max',       'Max |CTE| (m)',  'Max |CTE|')
+    grouped_bars(axes[1, 0], 'steer_jitter',  'Steer rate std', 'Steering Jitter')
+    grouped_bars(axes[1, 1], 'drop_rate_pct', '% frames',       'Perception Drop Rate')
+
+    # Single shared legend at the top
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='upper center', ncol=len(methods),
+               fontsize=12, frameon=True, bbox_to_anchor=(0.5, 1.0))
 
     plt.tight_layout()
     out_path = out_dir / 'eval_controller.png'
     plt.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close()
     print(f'Plot saved: {out_path}')
+
+
+def plot_path_xy(raw_data: list, out_dir: Path):
+    """Bird's eye view (pos_x vs pos_y) of vehicle paths per weather."""
+    weathers = VALID_WEATHERS
+    methods  = VALID_METHODS
+    n        = len(weathers)
+
+    fig, axes = plt.subplots(1, n, figsize=(5 * n, 5))
+    fig.suptitle("Vehicle Path — Bird's Eye View", fontsize=14, fontweight='bold')
+
+    for col, weather in enumerate(weathers):
+        ax = axes[col]
+        ax.set_title(weather.capitalize(), fontsize=12)
+        ax.grid(True, linestyle='--', alpha=0.5)
+        ax.set_aspect('equal', adjustable='datalim')
+
+        for method in methods:
+            color  = COLORS.get(method, 'gray')
+            labeled = False
+            for entry in raw_data:
+                if entry['weather'] != weather or entry['method'] != method:
+                    continue
+                odom_df = entry['odom_df']
+                if odom_df.empty or 'pos_x' not in odom_df.columns:
+                    continue
+                ax.plot(odom_df['pos_x'].values, odom_df['pos_y'].values,
+                        color=color, linewidth=1.2, alpha=0.6,
+                        label=LABELS.get(method, method) if not labeled else None)
+                labeled = True
+
+        ax.legend(fontsize=9)
+        ax.set_xlabel('Position X (m)')
+        if col == 0:
+            ax.set_ylabel('Position Y (m)')
+
+    plt.tight_layout()
+    out_path = out_dir / 'path_xy.png'
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f'Path plot saved: {out_path}')
+
+
+def plot_cte_distribution(raw_data: list, out_dir: Path):
+    """Boxplot of CTE values combining all repeats per (method × weather)."""
+    weathers = VALID_WEATHERS
+    methods  = VALID_METHODS
+    n        = len(weathers)
+
+    fig, axes = plt.subplots(1, n, figsize=(5 * n, 5), sharey=True)
+    fig.suptitle('CTE Distribution — All Frames Combined (3 Repeats)',
+                 fontsize=14, fontweight='bold')
+
+    for col, weather in enumerate(weathers):
+        ax = axes[col]
+        ax.set_title(weather.capitalize(), fontsize=12)
+        ax.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax.yaxis.grid(True, linestyle='--', alpha=0.5)
+        ax.set_axisbelow(True)
+
+        data, labels, colors_list = [], [], []
+        for method in methods:
+            ctes = []
+            for entry in raw_data:
+                if entry['weather'] != weather or entry['method'] != method:
+                    continue
+                cte_df = entry['cte_df']
+                if cte_df.empty:
+                    continue
+                ctes.extend(cte_df['cte_m'].values.tolist())
+            if ctes:
+                data.append(ctes)
+                labels.append(LABELS.get(method, method))
+                colors_list.append(COLORS.get(method, 'gray'))
+
+        if not data:
+            continue
+
+        bp = ax.boxplot(data, labels=labels, patch_artist=True, widths=0.6,
+                        medianprops=dict(color='black', linewidth=1.5),
+                        flierprops=dict(marker='.', markersize=3, alpha=0.3),
+                        showfliers=True)
+        for patch, color in zip(bp['boxes'], colors_list):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+
+        if col == 0:
+            ax.set_ylabel('CTE (m)', fontsize=12)
+
+    plt.tight_layout()
+    out_path = out_dir / 'cte_distribution.png'
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f'CTE distribution plot saved: {out_path}')
+
+
+def plot_bias_comparison(df: pd.DataFrame, out_dir: Path):
+    """Bar chart of calibrated bias_offset per (method × weather)."""
+    if 'bias_offset' not in df.columns:
+        print('  [warn] bias_offset column missing — skipping bias plot')
+        return
+
+    weathers = VALID_WEATHERS
+    methods  = [m for m in VALID_METHODS if m in df['method'].unique()]
+
+    fig, ax = plt.subplots(figsize=(11, 6))
+    fig.suptitle('Calibrated Bias Offset per Method × Weather',
+                 fontsize=14, fontweight='bold', y=0.98)
+    ax.set_title('bias = mean(center) − 0.5  (measured at spawn, before driving)',
+                 fontsize=10, style='italic', pad=8)
+
+    w = 0.26
+    x = np.arange(len(weathers))
+
+    for i, method in enumerate(methods):
+        vals, errs = [], []
+        for wx in weathers:
+            sub = df[(df['method'] == method) & (df['weather'] == wx)]['bias_offset'].dropna()
+            vals.append(float(sub.mean()) if len(sub) else float('nan'))
+            errs.append(float(sub.std())  if len(sub) > 1 else 0.0)
+
+        ax.bar(x + i * w, vals, width=w, yerr=errs, capsize=4,
+               label=LABELS.get(method, method),
+               color=COLORS.get(method, 'gray'),
+               edgecolor='white', linewidth=0.5,
+               error_kw={'linewidth': 1.2, 'ecolor': 'black'})
+
+    ax.set_xticks(x + w)
+    ax.set_xticklabels([wx.capitalize() for wx in weathers], fontsize=12)
+    ax.set_ylabel('Bias offset', fontsize=12)
+    ax.yaxis.grid(True, linestyle='--', alpha=0.5)
+    ax.set_axisbelow(True)
+    ax.legend(fontsize=11, loc='upper left')
+    ax.tick_params(axis='y', labelsize=10)
+
+    plt.tight_layout()
+    out_path = out_dir / 'bias_comparison.png'
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f'Bias comparison plot saved: {out_path}')
+
+
+def plot_hz_consistency(df: pd.DataFrame, out_dir: Path):
+    """Boxplot of Hz per topic per method — verifies no missing data or rate issues."""
+    topics = {
+        'lane_hz':  '/lka/lane_center',
+        'cte_hz':   '/lka/gt/cross_track_m',
+        'ctrl_hz':  'vehicle_control_cmd',
+        'odom_hz':  'odometry',
+    }
+    methods = [m for m in VALID_METHODS if m in df['method'].unique()]
+
+    fig, axes = plt.subplots(1, len(topics), figsize=(14, 5), sharey=False)
+    fig.suptitle('Topic Hz Consistency — All 36 Trials', fontsize=14, fontweight='bold')
+
+    for ax, (col, topic_name) in zip(axes, topics.items()):
+        data, labels, colors_list = [], [], []
+        for method in methods:
+            vals = df[df['method'] == method][col].dropna().values
+            if len(vals):
+                data.append(vals)
+                labels.append(LABELS.get(method, method))
+                colors_list.append(COLORS.get(method, 'gray'))
+
+        if not data:
+            continue
+
+        bp = ax.boxplot(data, labels=labels, patch_artist=True, widths=0.5,
+                        medianprops=dict(color='black', linewidth=2),
+                        flierprops=dict(marker='o', markersize=5, alpha=0.6))
+        for patch, color in zip(bp['boxes'], colors_list):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.75)
+
+        # Expected Hz reference line
+        all_vals = np.concatenate(data)
+        expected = round(float(np.median(all_vals)))
+        ax.axhline(expected, color='red', linewidth=1.2, linestyle='--', alpha=0.7,
+                   label=f'median {expected} Hz')
+
+        ax.set_title(topic_name, fontsize=9)
+        ax.set_ylabel('Hz')
+        ax.yaxis.grid(True, linestyle='--', alpha=0.5)
+        ax.set_axisbelow(True)
+        ax.legend(fontsize=8)
+
+        # Annotate min/max
+        ax.text(0.97, 0.04, f'min={all_vals.min():.1f}  max={all_vals.max():.1f}',
+                transform=ax.transAxes, ha='right', va='bottom', fontsize=8,
+                color='gray')
+
+    plt.tight_layout()
+    out_path = out_dir / 'hz_consistency.png'
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f'Hz consistency plot saved: {out_path}')
 
 
 def main():
@@ -325,17 +581,24 @@ def main():
         bags = [bag_path]
     else:
         all_bags = sorted([d for d in bag_path.iterdir() if d.is_dir() and any(d.glob('*.db3'))])
-        # Keep only the latest bag per (method, weather) — bags are named
-        # <method>_<weather>_<timestamp> so sorting by name gives chronological order.
-        latest: dict = {}
-        for d in all_bags:
-            m, w = parse_method_weather(d)
-            if m is not None:
-                latest[(m, w)] = d   # later sort order wins → newest timestamp kept
-        bags = sorted(latest.values())
+        bags = [d for d in all_bags if parse_method_weather(d)[0] is not None]
         skipped = len(all_bags) - len(bags)
         if skipped:
-            print(f'  (skipped {skipped} older duplicate bag(s) — keeping latest per method/weather)')
+            print(f'  (skipped {skipped} bag(s) with unrecognised names)')
+
+    # Load calibration log for bias_offset lookup
+    bias_lookup: dict = {}
+    calib_log_dir = bag_path if not has_db3 else bag_path.parent
+    calib_log_path = calib_log_dir / 'calibration_log.csv'
+    if calib_log_path.exists():
+        try:
+            calib_df = pd.read_csv(calib_log_path)
+            for _, row in calib_df.iterrows():
+                key = (row['method'], row['weather'], int(row['rep']))
+                bias_lookup[key] = float(row['bias_offset'])
+            print(f'  Loaded {len(bias_lookup)} calibration entries from {calib_log_path.name}')
+        except Exception as e:
+            print(f'  [warn] could not load calibration log: {e}')
 
     if not bags:
         print(f'No bags found in {bag_path}')
@@ -347,10 +610,13 @@ def main():
     for b in bags:
         r, lane_df, cte_df, ctrl_df, odom_df = process_bag(b)
         if r:
+            key = (r['method'], r['weather'], r.get('rep', 1))
+            r['bias_offset'] = bias_lookup.get(key, 0.0)
             rows.append(r)
             raw_data.append({
                 'method':  r['method'],
                 'weather': r['weather'],
+                'rep':     r.get('rep', 1),
                 'bag':     r['bag'],
                 'lane_df': lane_df,
                 'cte_df':  cte_df,
@@ -363,8 +629,10 @@ def main():
         return
 
     col_order = [
-        'method', 'weather', 'bag',
+        'method', 'weather', 'rep', 'bag',
+        'bias_offset',
         'duration_s', 'total_frames',
+        'lane_hz', 'cte_hz', 'ctrl_hz', 'odom_hz',
         'cte_rmse', 'cte_max', 'cte_p95', 'cte_mean',
         'off_lane_pct', 'drop_rate_pct',
         'steer_jitter', 'steer_std',
@@ -380,10 +648,31 @@ def main():
     print('\n── Controller Metrics ────────────────────────────────────')
     print(df.to_string(index=False))
 
+    # Per-condition summary (mean ± std over repeats)
+    if 'rep' in df.columns and df['rep'].nunique() > 0:
+        summary_df = df.groupby(['method', 'weather']).agg(
+            n_repeats=('rep', 'count'),
+            cte_rmse_mean=('cte_rmse', 'mean'),
+            cte_rmse_std=('cte_rmse', 'std'),
+            off_lane_pct_mean=('off_lane_pct', 'mean'),
+            off_lane_pct_std=('off_lane_pct', 'std'),
+            steer_jitter_mean=('steer_jitter', 'mean'),
+            steer_jitter_std=('steer_jitter', 'std'),
+        ).reset_index().round(4)
+        summary_path = out_dir / 'controller_metrics_summary.csv'
+        summary_df.to_csv(summary_path, index=False)
+        print(f'\nSummary saved: {summary_path}  ({len(summary_df)} conditions)')
+        print('\n── Summary (mean ± std) ──────────────────────────────────')
+        print(summary_df.to_string(index=False))
+
     save_raw_csv(raw_data, out_dir)
     if len(df) > 1:
         plot_results(df, out_dir)
         plot_trajectories(raw_data, out_dir)
+        plot_path_xy(raw_data, out_dir)
+        plot_cte_distribution(raw_data, out_dir)
+        plot_bias_comparison(df, out_dir)
+        plot_hz_consistency(df, out_dir)
 
 
 if __name__ == '__main__':

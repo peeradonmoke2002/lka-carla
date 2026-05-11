@@ -1,132 +1,195 @@
-# Perception Evaluation Summary
+# LKA Evaluation Results Summary
 
-**Bag:** `bags/20260511_141516`
-**Conditions:** Rain → Clear → Fog → Night (60 s each), stationary ego vehicle
-**Methods:** YOLO (`yolo26l-seg.pt`) · Pure Vision (HSV yellow + gray Canny/Hough) · SCNN (ResNet-18)
-**Image size:** 1600 × 900 px · `y_ref = 0.85 × H = 765 px`
-**GT formula:** `true_center = 0.5 − cte_m × (760 / (4.0 × 1600))`
-**Node mode:** `enable_hysteresis: true` (hysteresis + single-side synthesis enabled)
+**Project:** Vision-Based Lane Keeping Assist — KMUTT FIBO Machine Vision
+**Methods:** YOLO (`yolo26l-seg.pt`) · SCNN (ResNet-18) · Pure Vision (HSV + Canny/Hough)
+**Simulator:** CARLA Town01 · 4 weather conditions: Rain, Clear, Fog, Night
 
 ---
 
-## Detection Rate
+## Overall Verdict
+
+| Rank | Method | Strength |
+|------|--------|----------|
+| 🥇 1st | **SCNN** | Most consistent CTE, smoothest steering, lowest drop rate |
+| 🥈 2nd | **YOLO** | Best in clear weather, high confidence, no tuning needed |
+| 🥉 3rd | **Pure Vision** | Competitive in fog, but unreliable at night, needs per-weather tuning |
+
+> All 3 methods kept the vehicle **within the lane (CTE < 10 cm) 100% of the time** across all weather conditions and all 36 closed-loop trials.
+
+---
+
+---
+
+## Phase 3 — Perception Evaluation (Stationary)
+
+**Bag:** `bags/20260511_141516` · Vehicle stationary · 60 s per weather condition
+**Setup:** `enable_hysteresis: true` · Image 1600×900 px · ROI polygon applied
+
+### Detection Rate
 
 | Weather | YOLO | SCNN | Pure Vision |
-|---------|------|------|-------------|
+|---------|:----:|:----:|:-----------:|
 | Rain    | 100% | 100% | 100%        |
 | Clear   | 100% | 100% | 100%        |
-| Fog     | 100% | 100% | **99.87%** ← 1 miss |
+| Fog     | 100% | 100% | 99.87% ⚠️  |
 | Night   | 100% | 100% | 100%        |
 
-All methods achieve near-100% detection. Pure Vision missed 1 frame in fog — the only non-perfect result across all conditions.
+Pure Vision missed 1 frame in fog — the only non-perfect result.
 
 ---
 
-## Lateral Error `|center_norm − true_center|`
+### Lateral Error `|center − true_center|` — lower = better
 
-Lower is better. Vehicle is stationary so CTE ≈ 0, making this equivalent to `|center_norm − 0.5|`.
+> ⚠️ Vehicle is stationary so this measures calibration offset, not dynamic accuracy.
+> Pure Vision's apparent advantage disappears once the vehicle moves.
 
-| Weather | Pure Vision | YOLO   | SCNN   | Winner |
-|---------|-------------|--------|--------|--------|
-| Rain    | **0.0088**  | 0.0098 | 0.0118 | Pure Vision |
-| Clear   | **0.0068**  | 0.0103 | 0.0117 | Pure Vision |
-| Fog     | **0.0110**  | 0.0109 | 0.0127 | YOLO *(by 0.0001)* |
-| Night   | **0.0069**  | 0.0100 | 0.0122 | Pure Vision |
-
-> ⚠️ **Caveat:** Pure Vision's lower error reflects an ROI/calibration offset, not true accuracy. PV's center estimate consistently sits closer to 0.5 due to its ROI polygon geometry. This advantage disappears once the vehicle moves and CTE becomes non-zero.
+| Weather | YOLO   | SCNN   | Pure Vision |
+|---------|:------:|:------:|:-----------:|
+| Rain    | 0.0098 | 0.0118 | **0.0088**  |
+| Clear   | 0.0103 | 0.0117 | **0.0068**  |
+| Fog     | **0.0109** | 0.0127 | 0.0110  |
+| Night   | 0.0100 | 0.0122 | **0.0069**  |
 
 ---
 
-## Center Stability `center_diff_std` (frame-to-frame jitter)
+### Center Stability `center_diff_std` — lower = better
 
-Lower is better.
+Frame-to-frame jitter. More important than lateral error for controller performance.
 
 | Weather | YOLO       | SCNN       | Pure Vision |
-|---------|------------|------------|-------------|
+|---------|:----------:|:----------:|:-----------:|
 | Rain    | **0.0001** | 0.0002     | 0.0022      |
 | Clear   | **0.0000** | **0.0000** | 0.0009      |
 | Fog     | **0.0001** | **0.0000** | 0.0016      |
-| Night   | **0.0001** | **0.0001** | 0.0060      |
+| Night   | **0.0001** | **0.0001** | 0.0060 ❌  |
 
-YOLO and SCNN are dramatically more stable. At night, PV jitter is **60× larger** than YOLO's.
-
----
-
-## Right Lane Stability `rx_std` (pixels)
-
-| Weather | YOLO       | SCNN | Pure Vision |
-|---------|------------|------|-------------|
-| Rain    | **0.12**   | 0.28 | 5.63        |
-| Clear   | **0.06**   | 0.07 | 1.98        |
-| Fog     | **0.13**   | 0.16 | 3.66        |
-| Night   | **0.20**   | 0.23 | 13.66 ❌   |
-
-PV uses gray-channel Canny for the right edge. At night, its right-lane jitter is **68× larger** than YOLO's.
+Pure Vision night jitter is **60× larger** than YOLO. Right-lane stability (rx_std) is even worse: **68× at night** (13.66 vs 0.20 px).
 
 ---
 
-## Left Lane Stability `lx_std` (pixels)
-
-| Weather | YOLO       | SCNN       | Pure Vision |
-|---------|------------|------------|-------------|
-| Rain    | **0.22**   | 0.37       | 0.66        |
-| Clear   | **0.17**   | 0.05       | 0.61        |
-| Fog     | **0.15**   | 0.06       | 0.70        |
-| Night   | **0.14**   | 0.08       | 0.84        |
-
-All three detect the left (yellow) marking reasonably. YOLO and SCNN outperform PV at night.
-
----
-
-## YOLO Confidence
+### YOLO Confidence
 
 | Rain   | Clear  | Fog    | Night  |
-|--------|--------|--------|--------|
+|:------:|:------:|:------:|:------:|
 | 0.9625 | 0.9681 | 0.9495 | 0.9620 |
 
-High and consistent across all conditions with no per-weather tuning.
+High and consistent — no per-weather tuning required.
 
 ---
 
-## FPS
-
-FPS reflects bag replay rate, not real inference cost.
-
-| Rain | Clear | Fog  | Night |
-|------|-------|------|-------|
-| 11.7 | 12.0  | 12.4 | 9.0   |
-
----
-
-## Evaluation Caveats
-
-### 1. Lateral error is not ground-truth accuracy
-With a stationary vehicle, CTE ≈ constant, so the metric reduces to `|center − 0.5|`. PV's lower error is a calibration artefact from its ROI polygon, not a sign of superior detection. True accuracy requires a moving vehicle with varying CTE.
-
-### 2. enable_hysteresis = true (consistent baseline)
-All three nodes ran with `enable_hysteresis: true` — same hysteresis state machine (confirm × 3, tolerate × 5) and same single-side synthesis (± 760 px) applied equally across all methods. This setting will also be used for the controller test, ensuring perception eval and controller eval share the same baseline with no bias between phases.
-
-### 3. FPS = bag replay rate
-Real inference latency requires live `time.perf_counter()` measurements around the model forward pass.
-
----
-
-## Key Findings
+### Phase 3 Summary
 
 | Aspect | YOLO | SCNN | Pure Vision |
-|--------|------|------|-------------|
-| Lateral error | Middle | Worst | **Best** *(ROI artefact)* |
-| Center stability | **Best** | **≈ Best** | Worst (60× YOLO at night) |
-| Right lane stability | **Best** | ≈ Best | Worst (68× YOLO at night) |
-| Left lane stability | **≈ Best** | **≈ Best** | Worst |
-| Confidence | **0.95–0.97** | N/A | N/A |
-| Weather adaptability | **No tuning needed** | **No tuning needed** | Per-weather HSV required |
-| GPU required | Yes | Yes | **No (CPU only)** |
+|--------|:----:|:----:|:-----------:|
+| Detection rate | ✅ 100% | ✅ 100% | ⚠️ 99.87% |
+| Center stability | ✅ Best | ✅ ≈ Best | ❌ Worst |
+| Right-lane stability | ✅ Best | ✅ ≈ Best | ❌ 68× worse at night |
+| Lateral error (stationary) | 2nd | 3rd | 1st *(ROI artefact)* |
+| Weather tuning needed | ❌ None | ❌ None | ✅ Per-weather HSV |
+| GPU required | Yes | Yes | No (CPU only) |
 
-### Conclusion
+---
 
-**YOLO is the most stable method overall.** It delivers the lowest frame-to-frame jitter in all conditions, the most stable right-lane detection (especially at night), and high consistent confidence without any per-weather tuning.
+---
 
-**SCNN is competitive with YOLO** on stability in clear and fog conditions but is slightly worse in rain and night. It requires a more involved training pipeline.
+## Phase 4 — Closed-Loop Controller Evaluation
 
-**Pure Vision appears best on lateral error but this is misleading** — the advantage is a calibration offset that disappears once the vehicle moves. Its right-lane detection (gray Canny) is unreliable at night (rx_std = 13.66 vs YOLO 0.20) and requires manual HSV threshold calibration per weather. High jitter will translate directly into noisy steering when connected to the Pure Pursuit controller.
+**Bags:** `bags/closed_loop/` · 36 trials (3 methods × 4 weathers × **3 repeats**)
+**Controller:** Pure Pursuit · `wheel_base=3.0046 m` · `ld_k=2.4` · `throttle=0.3`
+**Route:** Town01 · Spawn x=317 → Stop x=108 (~209 m)
+
+**Fairness measures:**
+- Live bias calibration at spawn before every trial (`bias = mean(center) − 0.5` subtracted from controller)
+- 3 repeats → results reported as **mean ± std**
+- Spawn verified identical: all 36 trials start at `cte_m = 0.00023 m`
+
+---
+
+### Bias Offset (Calibration)
+
+Bias is a **model geometry artefact** — constant across weather for neural methods.
+
+| Method | Rain | Clear | Fog | Night |
+|--------|:----:|:-----:|:---:|:-----:|
+| YOLO | 0.0104 | 0.0104 | 0.0105 | 0.0115 |
+| SCNN | 0.0121 | 0.0118 | 0.0117 | 0.0127 |
+| Pure Vision | 0.0066 | 0.0090 | 0.0085 | 0.0108 |
+
+YOLO/SCNN std < 0.001 across repeats. Pure Vision varies more due to weather-adaptive HSV thresholds.
+
+---
+
+### CTE RMSE — mean ± std (m) — lower = better
+
+| Method | Rain | Clear | Fog | Night |
+|--------|:----:|:-----:|:---:|:-----:|
+| YOLO | 0.022 ± 0.002 | **0.013 ± 0.009** | 0.019 ± 0.008 | 0.020 ± 0.014 |
+| SCNN | **0.016 ± 0.007** | 0.024 ± 0.001 | **0.017 ± 0.002** | **0.014 ± 0.008** |
+| Pure Vision | 0.030 ± 0.001 | 0.034 ± 0.011 | 0.017 ± 0.011 | 0.040 ± 0.005 |
+
+- **YOLO** best in clear (0.013 m — lowest single result overall)
+- **SCNN** best in rain, fog, night — lowest variance (most repeatable)
+- **Pure Vision** worst in clear and night; fog competitive but inconsistent (±0.011)
+
+---
+
+### Steering Jitter — mean ± std — lower = smoother
+
+| Method | Rain | Clear | Fog | Night |
+|--------|:----:|:-----:|:---:|:-----:|
+| YOLO | 0.011 ± 0.004 | 0.014 ± 0.009 | 0.008 ± 0.007 | 0.008 ± 0.003 |
+| **SCNN** | **0.006 ± 0.001** | **0.005 ± 0.000** | **0.003 ± 0.001** | **0.006 ± 0.001** |
+| Pure Vision | 0.021 ± 0.002 | 0.007 ± 0.000 | 0.015 ± 0.003 | 0.048 ± 0.012 |
+
+Pure Vision night jitter **(0.048) = 8× SCNN** — directly caused by noisy right-lane detection.
+
+---
+
+### Perception Drop Rate (during driving) — mean % — lower = better
+
+| Method | Rain | Clear | Fog | Night |
+|--------|:----:|:-----:|:---:|:-----:|
+| YOLO | 1.29 | 1.29 | 0.85 | 1.23 |
+| **SCNN** | 0.96 | **0.26** | **0.15** | 1.08 |
+| Pure Vision | 1.83 | 1.72 | 1.97 | **0.37** |
+
+> ⚠️ Pure Vision drops least at night but has the **highest night CTE** (0.040 m) — it detects frequently but inaccurately.
+
+---
+
+### Off-Lane Rate `|CTE| > 0.10 m`
+
+**0.00% — all methods, all weathers, all 36 trials.**
+
+---
+
+### Route Consistency (Fairness Check)
+
+| Check | Result |
+|-------|--------|
+| Start CTE (all 36 trials) | 0.00023 m — identical ✅ |
+| Mean speed | 4.59–4.72 m/s (throttle constant) ✅ |
+| Path shape | X-Y paths overlap exactly across methods ✅ |
+
+---
+
+### Phase 4 Summary
+
+| Aspect | YOLO | SCNN | Pure Vision |
+|--------|:----:|:----:|:-----------:|
+| CTE RMSE rank | 2nd | **1st** | 3rd |
+| Best weather | Clear | Rain / Fog / Night | — |
+| Steering smoothness | 2nd | **Best** | Worst |
+| Perception drop rate | 2nd | **Best** | Worst |
+| Result consistency | Medium | **Best** | Worst |
+| Off-lane events | None ✅ | None ✅ | None ✅ |
+
+---
+
+### Final Conclusion
+
+**SCNN wins closed-loop.** Lowest CTE in 3/4 weathers, smoothest steering, fewest detection drops. Bias is a fixed geometric offset that the calibration step fully corrects.
+
+**YOLO is the best for clear-weather** and a strong all-rounder. Higher variance in night suggests occasional detection instability, but overall performance is reliable.
+
+**Pure Vision is not recommended for closed-loop control.** Night steering jitter (8× SCNN), highest drop rate in most conditions, and weather-dependent bias make it the least reliable option despite requiring no GPU.
