@@ -2,12 +2,6 @@ roi:
   image_h: 900
   image_w: 1600
 
-  # Trapezoid polygon (x, y) — covers ego lane in front of vehicle
-  #
-  #   (764,457)──(825,456)        ← top edge  (horizon)
-  #      /                 \
-  #   (102,892)────────(1465,894) ← bottom edge (near vehicle)
-  #
   polygon:
     - [102,  892]   # bottom-left
     - [764,  457]   # top-left

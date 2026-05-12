@@ -1,33 +1,4 @@
 #!/usr/bin/python3
-"""
-SCNN Lane Detection Node (pytorch-auto-drive backend)
-https://github.com/voldemortX/pytorch-auto-drive
-
-Prerequisites
-─────────────
-1. Clone the repo and install deps:
-     git clone https://github.com/voldemortX/pytorch-auto-drive.git ~/pytorch-auto-drive
-     cd ~/pytorch-auto-drive && pip install -r requirements.txt
-
-2. Convert dataset (run once):
-     python3 /home/peeradon/lka-carla-yolo/training/yolo2scnn.py
-
-3. Copy custom config and dataset class into pytorch-auto-drive:
-     cp /home/peeradon/lka-carla-yolo/training/scnn_lka_config.py \
-        ~/pytorch-auto-drive/configs/lane_detection/scnn/resnet18_lka.py
-     # Register LkaAsSegmentation in utils/datasets/__init__.py
-
-4. Train:
-     cd ~/pytorch-auto-drive
-     python main_landet.py --config configs/lane_detection/scnn/resnet18_lka.py
-
-5. Set 'weights' param below to the trained checkpoint.
-
-Publishes
-─────────
-  /lka/scnn/lane_center   lka_msgs/LaneCenter
-  /lka/scnn_image         sensor_msgs/Image  (debug overlay)
-"""
 import sys
 import os
 
@@ -45,9 +16,6 @@ PAD_ROOT = os.path.expanduser('~/lka-carla-yolo/pytorch-auto-drive')
 if PAD_ROOT not in sys.path:
     sys.path.insert(0, PAD_ROOT)
 
-# pytorch-auto-drive colour → class index mapping used at training time
-# (CULane palette, re-mapped to our 3-class case)
-# class 0 = background, 1 = left_marking, 2 = right_edge
 NUM_CLASSES = 3
 
 

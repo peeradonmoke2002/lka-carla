@@ -1,12 +1,9 @@
 /**:
   ros__parameters:
-
-    # ── Model ─────────────────────────────────────────────────────
     weights:           "/home/peeradon/lka-carla-yolo/models/best_vision.pt"
     weather_mode:      "rain"
     min_detection_conf: 0.45       # min YOLO confidence to accept detection
 
-    # ── Lane fitting ──────────────────────────────────────────────
     poly_degree:   1
     min_pixels:    50
     y_top_ratio:   0.50            # ROI top boundary  (ratio of image height)
@@ -14,9 +11,6 @@
     lane_width_m:  4.0             # Town01 lane width (metres)
     lane_width_px: 760             # lane width at y_ref (pixels)
 
-    # ── Hysteresis ────────────────────────────────────────────────
-    # false = raw output  → use for perception eval
-    # true  = smoothed    → use for closed-loop driving
     enable_hysteresis: false
     confirm_frames:    3           # good frames needed to enter TRACKING
     lost_frames:       5           # bad frames tolerated before leaving TRACKING

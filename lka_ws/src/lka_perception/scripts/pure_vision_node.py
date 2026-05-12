@@ -1,11 +1,4 @@
 #!/usr/bin/python3
-"""
-Pure Vision Lane Detection Node
-
-Detects lanes via HSV yellow (left) + grayscale Canny (right) + Hough lines,
-then publishes the ego-lane center. All parameters are loaded from a YAML file.
-"""
-
 import os
 import yaml
 import rclpy

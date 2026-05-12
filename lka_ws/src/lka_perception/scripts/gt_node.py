@@ -1,15 +1,5 @@
 #!/usr/bin/python3
-"""
-Ground Truth Node — Cross-Track Error from Town01 OpenDrive map
 
-Loads Town01.xodr offline (no CARLA server required), subscribes to
-/carla/ego_vehicle/odometry, and publishes the vehicle's true lateral
-distance from the nearest driving-lane center in metres.
-
-Publishes
-─────────
-  /lka/gt/cross_track_m   std_msgs/Float64   signed CTE (+ = right of centre)
-"""
 import math
 import rclpy
 from rclpy.node import Node
