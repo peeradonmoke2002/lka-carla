@@ -1,0 +1,11 @@
+/**:
+  ros__parameters:
+    wheel_base:          3.0046   # Tesla Model 3 (CARLA default ego vehicle) [m]
+    lane_width:          3.5      # standard lane width [m]
+    min_lookahead:       3.0      # minimum lookahead distance [m]
+    max_lookahead:       10.0     # maximum lookahead distance [m]
+    ld_velocity_ratio:   2.4      # speed multiplier for lookahead (Autoware default)
+    max_steer_rad:       1.2217   # ~70° max steering angle [rad]
+    throttle:            0.3      # constant throttle [0, 1]
+    stop_x:              108.0    # brake when odometry x < this value [m]
+    center_bias_offset:  0.0      # lane center bias to subtract (calibrated per trial)
