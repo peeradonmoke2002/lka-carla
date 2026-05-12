@@ -124,3 +124,36 @@ ros2 launch lka_perception run_all_perception.launch.py
 ```bash
 source install/setup.bash && ros2 launch lka_bringup record_bag.launch.py
 ```
+
+
+## Weather Presets (Town01, confirmed)
+
+| Field | Clear | Rain | Fog | Night |
+|---|---|---|---|---|
+| cloudiness | 0.0 | 60.0 | 80.0 | 0.0 |
+| precipitation | 0.0 | 40.0 | 0.0 | 0.0 |
+| precipitation_deposits | 0.0 | 40.0 | 0.0 | 0.0 |
+| wind_intensity | 0.0 | 30.0 | 0.0 | 0.0 |
+| sun_azimuth_angle | 0.0 | 275.0 | 0.0 | 0.0 |
+| sun_altitude_angle | 75.0 | 20.0 | 45.0 | -90.0 |
+| fog_density | 0.0 | 5.0 | 80.0 | 0.0 |
+| fog_distance | 0.0 | 0.75 | 10.0 | 0.0 |
+| wetness | 0.0 | 80.0 | 0.0 | 0.0 |
+
+```bash
+# Clear
+ros2 topic pub --once /carla/weather_control carla_msgs/msg/CarlaWeatherParameters \
+  "{cloudiness: 0.0, precipitation: 0.0, precipitation_deposits: 0.0, wind_intensity: 0.0, sun_azimuth_angle: 0.0, sun_altitude_angle: 75.0, fog_density: 0.0, fog_distance: 0.0, wetness: 0.0}"
+
+# Rain
+ros2 topic pub --once /carla/weather_control carla_msgs/msg/CarlaWeatherParameters \
+  "{cloudiness: 60.0, precipitation: 40.0, precipitation_deposits: 40.0, wind_intensity: 30.0, sun_azimuth_angle: 275.0, sun_altitude_angle: 20.0, fog_density: 5.0, fog_distance: 0.75, wetness: 80.0}"
+
+# Fog
+ros2 topic pub --once /carla/weather_control carla_msgs/msg/CarlaWeatherParameters \
+  "{cloudiness: 80.0, precipitation: 0.0, precipitation_deposits: 0.0, wind_intensity: 0.0, sun_azimuth_angle: 0.0, sun_altitude_angle: 45.0, fog_density: 80.0, fog_distance: 10.0, wetness: 0.0}"
+
+# Night
+ros2 topic pub --once /carla/weather_control carla_msgs/msg/CarlaWeatherParameters \
+  "{cloudiness: 0.0, precipitation: 0.0, precipitation_deposits: 0.0, wind_intensity: 0.0, sun_azimuth_angle: 0.0, sun_altitude_angle: -90.0, fog_density: 0.0, fog_distance: 0.0, wetness: 0.0}"
+```
