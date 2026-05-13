@@ -335,7 +335,8 @@ def compare_lateral_error_time(raw, spans, use_gt, methods, out_path):
     ] + [plt.Line2D([0], [0], color='gray', ls='--', label='ideal = 0')]
     ax.set_xlabel('Time (s)')
     ax.set_ylabel(f'Lateral Error (px,  W={W})')
-    ax.legend(handles=legend_handles, fontsize=8, loc='lower right')
+    ax.set_ylim(0, 28)
+    ax.legend(handles=legend_handles, fontsize=8, loc='upper right')
     _shade_weather(ax, spans)
     plt.tight_layout()
     _save(fig, out_path)
@@ -425,31 +426,89 @@ def compare_fps(metrics, methods, out_path):
     _save(fig, out_path)
 
 
-def compare_lane_stability(metrics, methods, out_path):
-    x    = np.arange(len(WEATHER_ORDER))
-    n_m  = len(methods)
-    n_bars = 2 * n_m
-    bar_w  = 0.8 / n_bars
-    base   = -(n_bars - 1) / 2 * bar_w
-    _lx = {'YOLO': '#C0392B', 'Pure Vision': '#1E8449', 'SCNN': '#6C3483'}
-    _rx = {'YOLO': '#E74C3C', 'Pure Vision': '#2ECC71', 'SCNN': '#9B59B6'}
+def compare_lane_stability(raw, methods, out_path):
+    x     = np.arange(len(WEATHER_ORDER))
+    n_m   = len(methods)
+    bar_w = 0.7 / n_m
+    base  = -(n_m - 1) / 2 * bar_w
     fig, ax = plt.subplots(figsize=(9, 5))
-    fig.suptitle('Comparison — Lane Stability (lx_std, rx_std)\nlower = more stable',
+    fig.suptitle('Comparison — Max Lane Center Jitter per Weather\nlower = more stable',
                  fontsize=12, fontweight='bold')
     for i, method in enumerate(methods):
-        m = metrics[metrics['method'] == method].set_index('weather').reindex(WEATHER_ORDER)
-        ax.bar(x + base + (2 * i) * bar_w, m['lx_std'].values.astype(float), bar_w,
-               label=f'{method} lx', color=_lx.get(method, '#555'),
-               edgecolor='black', linewidth=0.6)
-        ax.bar(x + base + (2 * i + 1) * bar_w, m['rx_std'].values.astype(float), bar_w,
-               label=f'{method} rx', color=_rx.get(method, '#888'),
-               edgecolor='black', linewidth=0.6)
+        vals = np.array([
+            raw[(raw['method'] == method) & raw['detected'] & (raw['weather'] == w)]
+            .sort_values('timestamp_ns')['center']
+            .diff().abs().max() * W_IMAGE
+            if not raw[(raw['method'] == method) & raw['detected'] & (raw['weather'] == w)].empty
+            else np.nan
+            for w in WEATHER_ORDER
+        ])
+        bars = ax.bar(x + base + i * bar_w, vals, bar_w,
+                      label=method, color=M_COLORS.get(method, '#888'),
+                      edgecolor='black', linewidth=0.7)
+        _annotate_bar_values(ax, bars, vals, '{:.1f}', pad_ratio=0.02, inside_ratio=0.05)
     ax.set_xticks(x)
-    ax.set_xticklabels(WEATHER_ORDER)
-    ax.set_ylabel('Std (pixels)')
+    ax.set_xticklabels([w.capitalize() for w in WEATHER_ORDER])
+    ax.set_ylabel('Max Center Jitter (px, frame-to-frame)')
     ax.yaxis.grid(True, linestyle='--', alpha=0.4)
     ax.set_axisbelow(True)
-    ax.legend(fontsize=7, ncol=2)
+    ax.legend(fontsize=9)
+    plt.tight_layout()
+    _save(fig, out_path)
+
+
+def compare_lateral_error_rmse(metrics, methods, out_path):
+    x     = np.arange(len(WEATHER_ORDER))
+    n_m   = len(methods)
+    bar_w = 0.7 / n_m
+    base  = -(n_m - 1) / 2 * bar_w
+    fig, ax = plt.subplots(figsize=(9, 5))
+    fig.suptitle('Comparison — Lateral Error RMSE per Weather\nlower = more accurate',
+                 fontsize=12, fontweight='bold')
+    for i, method in enumerate(methods):
+        m        = metrics[metrics['method'] == method].set_index('weather').reindex(WEATHER_ORDER)
+        err_mean = m['err_mean'].values.astype(float)
+        err_std  = m['err_std'].values.astype(float)
+        vals     = np.sqrt(err_mean**2 + err_std**2) * W_IMAGE
+        bars = ax.bar(x + base + i * bar_w, vals, bar_w,
+                      label=method, color=M_COLORS.get(method, '#888'),
+                      edgecolor='black', linewidth=0.7)
+        _annotate_bar_values(ax, bars, vals, '{:.1f}', pad_ratio=0.02, inside_ratio=0.05)
+    ax.set_xticks(x)
+    ax.set_xticklabels([w.capitalize() for w in WEATHER_ORDER])
+    ax.set_ylabel('Lateral Error RMSE (px)')
+    ax.yaxis.grid(True, linestyle='--', alpha=0.4)
+    ax.set_axisbelow(True)
+    ax.legend(fontsize=9)
+    plt.tight_layout()
+    _save(fig, out_path)
+
+
+def compare_lateral_error_max(raw, methods, out_path):
+    x     = np.arange(len(WEATHER_ORDER))
+    n_m   = len(methods)
+    bar_w = 0.7 / n_m
+    base  = -(n_m - 1) / 2 * bar_w
+    fig, ax = plt.subplots(figsize=(9, 5))
+    fig.suptitle('Comparison — Max Lateral Error per Weather\nlower = better worst-case',
+                 fontsize=12, fontweight='bold')
+    for i, method in enumerate(methods):
+        vals = np.array([
+            raw[(raw['method'] == method) & raw['detected'] & (raw['weather'] == w)]['err_px'].abs().max()
+            if not raw[(raw['method'] == method) & raw['detected'] & (raw['weather'] == w)].empty
+            else np.nan
+            for w in WEATHER_ORDER
+        ])
+        bars = ax.bar(x + base + i * bar_w, vals, bar_w,
+                      label=method, color=M_COLORS.get(method, '#888'),
+                      edgecolor='black', linewidth=0.7)
+        _annotate_bar_values(ax, bars, vals, '{:.1f}', pad_ratio=0.02, inside_ratio=0.05)
+    ax.set_xticks(x)
+    ax.set_xticklabels([w.capitalize() for w in WEATHER_ORDER])
+    ax.set_ylabel('Max Lateral Error (px)')
+    ax.yaxis.grid(True, linestyle='--', alpha=0.4)
+    ax.set_axisbelow(True)
+    ax.legend(fontsize=9)
     plt.tight_layout()
     _save(fig, out_path)
 
@@ -459,11 +518,15 @@ def plot_compare_figures(raw, metrics, out_dir: Path):
 
     compare_lateral_error_time(raw, spans, use_gt, methods,
                                out_dir / 'eval_compare_lateral_error_time.png')
+    compare_lateral_error_rmse(metrics, methods,
+                               out_dir / 'eval_compare_lateral_error_rmse.png')
+    compare_lateral_error_max(raw, methods,
+                              out_dir / 'eval_compare_lateral_error_max.png')
     compare_detection_rate(metrics, methods,
                            out_dir / 'eval_compare_detection_rate.png')
     compare_fps(metrics, methods,
                 out_dir / 'eval_compare_fps.png')
-    compare_lane_stability(metrics, methods,
+    compare_lane_stability(raw, methods,
                            out_dir / 'eval_compare_lane_stability.png')
 
 

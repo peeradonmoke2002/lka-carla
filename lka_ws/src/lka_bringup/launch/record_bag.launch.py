@@ -25,6 +25,7 @@ RECORD_TOPICS = [
     '/lka/yolo/lane_center',
     '/lka/pure_vision/lane_center',
     '/lka/scnn/lane_center',
+    '/lka/gt/lane_center',
 ]
 
 WEATHER_PRESETS = {

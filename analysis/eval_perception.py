@@ -107,8 +107,8 @@ def assign_weather(lane_df, weather_df, window_sec=60.0):
 
 def attach_cte(lane_df, cte_df, max_gap_sec=CTE_MAX_DT_SEC):
     lane_df = lane_df.copy()
-    lane_df['cte_m'] = np.nan
     if cte_df.empty:
+        lane_df['cte_m'] = np.nan
         return lane_df
     lane_sorted = lane_df.sort_values('timestamp_ns')
     cte_sorted  = cte_df.sort_values('timestamp_ns')

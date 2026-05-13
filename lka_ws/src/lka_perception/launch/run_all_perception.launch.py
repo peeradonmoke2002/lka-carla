@@ -35,17 +35,6 @@ def generate_launch_description():
         description='Path to pure_vision_params.yaml',
     )
 
-
-    gt = Node(
-        package=package_name,
-        executable='gt_node.py',
-        name='gt_node',
-        output='screen',
-        parameters=[
-            {'use_sim_time': True},
-        ],
-    )
-
     yolo = Node(
         package=package_name,
         executable='yolo_node.py',
@@ -85,7 +74,6 @@ def generate_launch_description():
     ld.add_action(yolo_params_arg)
     ld.add_action(scnn_params_arg)
     ld.add_action(pure_vision_params_arg)
-    ld.add_action(gt)
     ld.add_action(yolo)
     ld.add_action(scnn)
     ld.add_action(pure_vision)
