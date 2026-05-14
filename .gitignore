@@ -5,7 +5,6 @@ log/
 *.pyc
 __pycache__/
 
-
 # IDE
 .vscode/
 .idea/
@@ -13,7 +12,3 @@ __pycache__/
 # dataset
 lka.yolo26/
 lka.scnn/
-
-# model
-# models/
-# yolo26l-seg.pt

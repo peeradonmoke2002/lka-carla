@@ -4,11 +4,6 @@
 
 Vision-Based Lane Keeping Assist (LKA) using multiple detection methods on CARLA Simulator. KMUTT FIBO — Machine Vision course, student ID 67340700403.
 
-
-**Always read and follow the best practices defined in**:
-- henki_ros2_best_practices.md
-
-
 ## Goal
 
 Compare lane detection methods (YOLO, Pure Vision/OpenCV) → find ego-lane center → Pure Pursuit controller → test across 4 weather conditions (Clear, Rain, Fog, Night).
