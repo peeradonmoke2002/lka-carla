@@ -242,15 +242,41 @@ $$\delta_{norm} = \text{clip}\left(\frac{\delta}{\delta_{max}}, -1, 1\right)$$
 
 ## Experiment 1 — Perception Performance
 
-**Objective:** เปรียบเทียบความแม่นยำและเสถียรภาพของ Lane Center ทั้ง 3 วิธีภายใต้ 4 สภาพอากาศ (Vehicle หยุดนิ่ง, 60 วินาที/สภาพอากาศ)
+**Objective**
 
-**Metrics:**
+เปรียบเทียบความแม่นยำและเสถียรภาพของ Lane Center Detection ทั้ง 3 วิธี (YOLO, Pure Vision, SCNN) ภายใต้ 4 สภาพอากาศ
+
+**Setup**
+
+| Parameter | Value |
+|---|---|
+| Simulator | CARLA (Town01) |
+| Ego Vehicle | Tesla Model 3 |
+| Camera | Front camera, 1600 × 900 px |
+| Detection Methods | YOLO, Pure Vision, SCNN |
+| Weather Conditions | Clear, Rain, Fog, Night |
+| Duration per Weather | 60 seconds |
+| Ground Truth | CARLA Waypoint API |
+
+**Metric**
+
+**Detection Rate (%)**
+- Percentage of frames with successful lane detection
+- Formula:
 
 $$\text{Det Rate} = \frac{\text{detected frames}}{\text{total frames}} \times 100$$
 
-$$\text{RMSE} = \sqrt{\frac{1}{N}\sum_{i=1}^{N}(center_i - true\_center_i)^2} \times 1600 \text{ (px)}$$
+**RMSE Lateral Error (px)**
+- Root mean square error of lane center from ideal position
+- Formula:
 
-$$\text{Max Jitter} = \max(|center_t - center_{t-1}|) \times 1600 \text{ (px)}$$
+$$\text{RMSE} = \sqrt{\frac{1}{N}\sum_{i=1}^{N}(center_i - true\_center_i)^2} \times 1600$$
+
+**Max Lane Jitter (px)**
+- Maximum frame-to-frame center jump across all frames
+- Formula:
+
+$$\text{Max Jitter} = \max(|center_t - center_{t-1}|) \times 1600$$
 
 **ผลการทดสอบ:**
 
@@ -275,15 +301,38 @@ $$\text{Max Jitter} = \max(|center_t - center_{t-1}|) \times 1600 \text{ (px)}$$
 - **YOLO** มี RMSE สม่ำเสมอที่สุด (16.6–18.4 px) โดย Jitter ไม่เกิน 2.3 px ในทุกสภาพอากาศ
 - **SCNN** เสถียรที่สุดโดยรวม โดย Max Jitter ไม่เกิน 1.4 px แต่มี RMSE สูงที่สุดในทุกสภาพอากาศ
 
-## Experiment 2 — Controller Performance (Closed-Loop)
+## Experiment 2 — Perception Effect to Controller
 
-**Objective:** ประเมินว่า Lane Center Output ของแต่ละวิธีส่งผลต่อพฤติกรรม Pure Pursuit Controller และ Lane Keeping อย่างไรภายใต้ 4 สภาพอากาศ (3 repeats × 3 methods × 4 weathers = 36 trials)
+**Objective**
 
-**Metrics:**
+ประเมินว่า Lane Center Output ของแต่ละวิธีส่งผลต่อพฤติกรรม Pure Pursuit Controller และ Lane Keeping อย่างไรภายใต้ 4 สภาพอากาศ
 
-$$\text{CTE RMSE} = \sqrt{\frac{1}{N}\sum_{i=1}^{N} cte_i^2} \times 100 \text{ (cm)}$$
+**Setup**
 
-$$\text{Max Steer Jitter} = \max(|\delta_t - \delta_{t-1}|) \times 100 \text{ (\%)}$$
+| Parameter | Value |
+|---|---|
+| Simulator | CARLA (Town01) |
+| Ego Vehicle | Tesla Model 3 |
+| Controller | Pure Pursuit |
+| Throttle | 0.3 |
+| Perception Input | YOLO / Pure Vision / SCNN |
+| Weather Conditions | Clear, Rain, Fog, Night |
+| Repeats per Condition | 3 runs |
+| Ground Truth | CARLA Waypoint API |
+
+**Metric**
+
+**CTE RMSE (cm)**
+- Root mean square cross-track error from lane center in real world
+- Formula:
+
+$$\text{CTE RMSE} = \sqrt{\frac{1}{N}\sum_{i=1}^{N} cte_i^2} \times 100$$
+
+**Max Steering Jitter (%)**
+- Maximum frame-to-frame steering command change
+- Formula:
+
+$$\text{Max Steer Jitter} = \max(|\delta_t - \delta_{t-1}|) \times 100$$
 
 **ผลการทดสอบ:**
 
