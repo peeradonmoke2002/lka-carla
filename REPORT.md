@@ -60,7 +60,9 @@ FRA626 Machine Vision for Smart Factory
 
 ![system_overview](./Images/sym-overview.png)
 
-สภาพอากาศ 4 แบบ (Rain, Fog, Clear, Night) ถูกเปลี่ยนผ่าน `/carla/weather_control` topic
+ระบบประกอบด้วย 3 ส่วนหลัก ได้แก่ **Perception**, **Control** และ **Evaluation** โดยกล้องหน้าของรถจะส่งภาพเข้าสู่โหนด Perception ที่เลือกใช้งาน (YOLO, Pure Vision หรือ SCNN) ซึ่งทำหน้าที่ตรวจจับเส้นเลนและคำนวณตำแหน่งกึ่งกลางของเลน (Normalized Lane Center) จากนั้นส่งต่อไปยัง Pure Pursuit Controller เพื่อคำนวณมุมเลี้ยวและควบคุมรถใน CARLA Simulator ในส่วนของ Evaluation ระบบใช้ GT Node ที่โหลดแผนที่ Town01 จาก CARLA เพื่อคำนวณ Cross-Track Error จริง สำหรับวัดประสิทธิภาพของแต่ละวิธีในสภาพอากาศทั้ง 4 แบบ
+
+สภาพอากาศ 4 แบบ (Clear, Rain, Fog, Night) ถูกกำหนดผ่าน CARLA Simulator API
 
 | สภาพอากาศ | ตัวอย่าง |
 |---|---|
@@ -82,10 +84,10 @@ FRA626 Machine Vision for Smart Factory
 1. รับภาพ RGB และ Semantic Segmentation จากกล้องหน้าพร้อมกัน
 2. Apply ROI polygon เพื่อตัดบริเวณท้องฟ้าและพื้นที่ไม่เกี่ยวข้องออก
 3. จาก Semantic image ใช้ Color Range แยก class:
-   - **RoadLine** (CARLA class 6) → `left_marking` (class 0)
-   - **Sidewalk** (CARLA class 8) → `right_edge` (class 1)
+   - **RoadLine** (CARLA class 6) → **left_marking** (class 0)
+   - **Sidewalk** (CARLA class 8) → **right_edge** (class 1)
 4. Find Contours เพื่อสร้าง Polygon Label ในรูปแบบ YOLO Segmentation
-5. บันทึก label ทั้ง YOLO format (`lka.yolo26/`) และ SCNN format (`lka.scnn/`)
+5. บันทึก label ในรูปแบบ YOLO Segmentation และ SCNN Segmentation
 
 ## YOLO
 
@@ -98,7 +100,7 @@ FRA626 Machine Vision for Smart Factory
 | batch | 16 | Images per step |
 | patience | 30 | Early stop threshold |
 
-**ผลการ Train:** Confidence 0.85–0.99 ในทุกสภาพอากาศ ตรวจจับได้ทั้ง `left_marking` และ `right_edge` อย่างชัดเจน
+**ผลการ Train:** Confidence 0.85–0.99 ในทุกสภาพอากาศ ตรวจจับได้ทั้งเส้นซ้าย (left_marking) และขอบขวา (right_edge) อย่างชัดเจน
 
 | Clear | Fog | Night | Rain |
 |---|---|---|---|
@@ -110,8 +112,8 @@ FRA626 Machine Vision for Smart Factory
 
 ![opencv_pipeline](./Images/opencv.png)
 
-- **Left side (left_marking):** Apply HSV Filter ตามสภาพอากาศ → Hough Line Fit
-- **Right side (right_edge):** Apply Canny Edge Detection → Hough Line Fit
+- **ฝั่งซ้าย (left_marking):** กรองสีเหลืองด้วย HSV Filter ตามสภาพอากาศ จากนั้น Fit เส้นด้วย Hough Transform
+- **ฝั่งขวา (right_edge):** ตรวจหาขอบด้วย Canny Edge Detection จากนั้น Fit เส้นด้วย Hough Transform
 
 | Weather | HSV_LO | HSV_HI | Canny |
 |---|---|---|---|
@@ -191,7 +193,7 @@ $$\delta_{norm} = \text{clip}\left(\frac{\delta}{\delta_{max}}, -1, 1\right)$$
 **วิธีแก้:** Hysteresis Filter
 - ต้องการ **3 เฟรมดีติดต่อกัน** เพื่อเข้าสู่ TRACKING state
 - ถือ center ล่าสุดที่ดีไว้ได้สูงสุด **5 เฟรมเลว**ก่อนกลับสู่ SEARCHING state
-- "เฟรมดี" = detected=True และ center jump < 0.12 (normalized)
+- "เฟรมดี" คือเฟรมที่ตรวจจับเลนสำเร็จและค่า Lane Center เปลี่ยนแปลงจากเฟรมก่อนหน้าไม่เกิน 0.12 (normalized)
 
 ---
 
@@ -268,10 +270,10 @@ $$\text{Max Steer Jitter} = \max(|\delta_t - \delta_{t-1}|) \times 100 \text{ (\
 
 | ปัญหา | สาเหตุ | แนวทางแก้ไข |
 |---|---|---|
-| Lane Center ไม่เสถียรในบางเฟรม | SCNN prob ต่ำกว่า threshold / YOLO confidence ต่ำ / Pure Vision Hough ไม่ fit | เพิ่ม Hysteresis Filter (3 good → tracking, 5 bad → searching) |
-| Pure Vision กลางคืน Max Jitter สูงถึง 58 px | แสงน้อยทำให้ Canny ตรวจจับ right_edge ผิดพลาด | ปรับ HSV threshold และ Canny threshold เฉพาะ Night condition |
-| SCNN node crash — FileNotFoundError | มี stray character (`"`) ต่อท้าย path ใน `scnn_params.yaml` | ลบ `"` ออกจาก `weights:` field |
-| SCNN output offset จาก true center | Dataset ฝึกในสภาพ Clear/Low graphic ไม่ครอบคลุม High graphic | ยอมรับ offset คงที่ เนื่องจาก RMSE อยู่ในช่วงที่รับได้ |
+| Lane Center ไม่เสถียรในบางเฟรม | โมเดลไม่สามารถตรวจจับเลนได้ในบางเฟรม ส่งผลให้ค่ากลางเลนขาดหายหรือกระโดด | เพิ่ม Hysteresis Filter โดยต้องการ 3 เฟรมดีติดต่อกันก่อนเข้าสู่ Tracking และทนเฟรมเสียได้สูงสุด 5 เฟรม |
+| Pure Vision กลางคืน Max Jitter สูงถึง 58 px | แสงน้อยทำให้ Canny ตรวจจับขอบขวาผิดพลาด | ปรับ HSV Threshold และ Canny Threshold เฉพาะสภาพกลางคืน |
+| SCNN โหลดโมเดลล้มเหลวเมื่อเริ่มระบบ | มีอักขระพิเศษแทรกอยู่ต่อท้าย Path ของไฟล์ weights ใน config | แก้ไข Path ให้ถูกต้องใน config file |
+| SCNN output มี offset จาก true center | Dataset ฝึกในสภาพอากาศ Clear และ Low Graphic Setting เท่านั้น ไม่ครอบคลุม High Graphic | ยอมรับ offset คงที่ เนื่องจาก RMSE อยู่ในช่วงที่ยอมรับได้ |
 
 ---
 
@@ -305,11 +307,11 @@ $$\text{Max Steer Jitter} = \max(|\delta_t - \delta_{t-1}|) \times 100 \text{ (\
 | SCNN Architecture | เข้าใจหลักการ Spatial Message Passing ใน 4 ทิศทาง และความแตกต่างจาก CNN ทั่วไปในการ capture long-range dependency |
 | YOLO Instance Segmentation | การ train และ deploy YOLO seg model, การอ่าน mask output และแปลงเป็น pixel coordinates |
 | Dataset Pipeline | การสร้าง Auto-labelling pipeline จาก CARLA Semantic Segmentation โดยไม่ต้อง label ด้วยมือ |
-| ROS2 Node Design | การออกแบบ Node, Publisher/Subscriber, Custom Message, Launch File และ Topic Remapping |
-| Pure Pursuit Algorithm | หลักการ Lookahead point, สูตรคำนวณ curvature และ steering angle, ผลกระทบของ k และ lookahead distance |
-| Hysteresis State Machine | การออกแบบ state machine สำหรับ temporal filtering เพื่อรักษาเสถียรภาพของ output |
-| Evaluation Metrics | การเลือกและตีความ RMSE, Max Jitter, CTE RMSE, Steer Jitter สำหรับ Perception และ Controller performance |
-| ROS2 Bag Recording | การบันทึกและ replay topic ด้วย rosbag2 และการวิเคราะห์ข้อมูลด้วย pandas |
+| ROS2 Node Design | การออกแบบโหนดสื่อสารใน ROS2 รวมถึงการส่งข้อมูลระหว่างโหนด การสร้าง Custom Message และการ Remap Topic ให้ระบบทำงานร่วมกันได้ |
+| Pure Pursuit Algorithm | หลักการคำนวณ Lookahead Point สูตร Curvature และ Steering Angle และผลกระทบของค่า Lookahead Distance ต่อพฤติกรรมการควบคุม |
+| Hysteresis State Machine | การออกแบบ State Machine สำหรับกรองสัญญาณชั่วคราวเพื่อรักษาเสถียรภาพของ Output ในกรณีที่ตรวจจับล้มเหลวบางเฟรม |
+| Evaluation Metrics | การเลือกและตีความ RMSE, Max Jitter, CTE RMSE และ Steer Jitter สำหรับประเมินประสิทธิภาพของ Perception และ Controller |
+| Bag Recording & Analysis | การบันทึกข้อมูล Sensor และ Control ระหว่างการทดสอบ และการวิเคราะห์ผลด้วยการประมวลผลข้อมูลเชิงตาราง |
 
 ---
 
@@ -347,7 +349,7 @@ $$\text{Max Steer Jitter} = \max(|\delta_t - \delta_{t-1}|) \times 100 \text{ (\
 
 **1. เครื่องมือ AI ที่ใช้งาน (AI Tools Used):**
 
-- Claude Code (Anthropic) — ช่วยเขียนโค้ด ROS2 Node, Launch File, Analysis Script และ README
+- Claude Code (Anthropic) — ช่วยเขียนโค้ด ROS2, Analysis Script และ README
 - ChatGPT (OpenAI) — ช่วยสืบค้นข้อมูลเกี่ยวกับ SCNN Architecture และ Pure Pursuit Algorithm
 
 **2. วัตถุประสงค์และขอบเขตการใช้งาน (Purpose & Extent of Use):**
@@ -356,16 +358,16 @@ $$\text{Max Steer Jitter} = \max(|\delta_t - \delta_{t-1}|) \times 100 \text{ (\
 
 - [x] **สร้างโครงร่างโปรเจค / โค้ดพื้นฐาน (Boilerplate):** ใช้ Claude Code ช่วยสร้างโครงสร้าง ROS2 package, CMakeLists.txt และ package.xml เบื้องต้น
 
-- [x] **เขียนลอจิก / อัลกอริทึม (Logic Generation):** ใช้ Claude Code ช่วยเขียน Hysteresis Filter state machine, Pure Pursuit controller node และ eval script
+- [x] **เขียนลอจิก / อัลกอริทึม (Logic Generation):** ใช้ Claude Code ช่วยเขียน Hysteresis Filter, Pure Pursuit Controller และ Analysis Script
 
-- [x] **ค้นหาและแก้ไขข้อผิดพลาด (Debugging):** ใช้ Claude Code ช่วยวิเคราะห์ FileNotFoundError ใน SCNN node (stray `"` ใน yaml path) และ topic mismatch ใน launch file
+- [x] **ค้นหาและแก้ไขข้อผิดพลาด (Debugging):** ใช้ Claude Code ช่วยวิเคราะห์ข้อผิดพลาดระหว่างโหลดโมเดล SCNN และปัญหา Topic Mapping ใน Launch File
 
-- [x] **การเขียนรายงาน (Documentation):** ใช้ Claude Code ช่วยเรียบเรียง README.md และ REPORT.md
+- [x] **การเขียนรายงาน (Documentation):** ใช้ Claude Code ช่วยเรียบเรียง README และ REPORT
 
 **3. การตรวจสอบและรับรองความถูกต้อง (Human Validation & Accountability):**
 
 โค้ดทุกส่วนที่ AI สร้างขึ้นได้รับการตรวจสอบและทดสอบด้วยตนเองก่อนนำไปใช้งาน เช่น:
-- ทดสอบ SCNN node ด้วย CARLA จริงเพื่อยืนยันว่าโหลด weight และ publish topic ได้ถูกต้อง
-- ตรวจสอบผล eval script กับ CSV จริงก่อนนำค่า metrics ไปใส่ในรายงาน
-- Run `ros2 topic echo` เพื่อยืนยันว่า Lane Center topic มีค่าถูกต้องในทุก perception method
-- ทดสอบ Hysteresis Filter โดยจำลอง frame ที่ detection ล้มเหลวและสังเกตพฤติกรรม state machine
+- ทดสอบโหนด SCNN ด้วย CARLA จริงเพื่อยืนยันว่าโหลดโมเดลและส่งค่า Lane Center ได้ถูกต้อง
+- ตรวจสอบผลลัพธ์ของ Analysis Script กับข้อมูลจริงก่อนนำค่า Metrics ไปใส่ในรายงาน
+- ตรวจสอบค่า Lane Center ที่ส่งออกมาจากทุกวิธีว่าอยู่ในช่วงที่ถูกต้อง
+- ทดสอบ Hysteresis Filter โดยจำลองเฟรมที่ตรวจจับล้มเหลวและสังเกตพฤติกรรมการเปลี่ยน State
