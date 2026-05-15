@@ -22,6 +22,9 @@ In this Project have Develop a lane detection pipeline using YOLO and Pure Visio
 - [How to Save Test Experiment 1 and Experiment 2](#how-to-save-test-experiment-1-and-experiment-2)
   - [Experiment 1 — Perception Performance](#experiment-1--perception-performance)
   - [Experiment 2 — Controller Performance](#experiment-2--controller-performance)
+- [Results](#results)
+  - [Experiment 1 — Perception Performance](#experiment-1--perception-performance-1)
+  - [Experiment 2 — Controller Performance](#experiment-2--controller-performance-1)
 
 ## Install
 
@@ -458,4 +461,57 @@ python3 lka_ws/src/lka_bringup/scripts/run_trials.py --dry-run
 python3 analysis/eval_controller.py bags/closed_loop/
 ```
 Results saved to `analysis/results/controller/`
+
+## Results
+
+### Experiment 1 — Perception Performance
+
+**Setup**: CARLA Town01, Tesla Model 3, 1600×900 front camera, 60 s per weather condition, vehicle stationary.
+
+All 3 methods achieved **100% detection rate** across all weather conditions.
+
+![eval_perception](./analysis/results/perception/eval_perception.png)
+
+![eval_compare_lateral_error_time](./analysis/results/perception/compare/eval_compare_lateral_error_time.png)
+
+| Weather | YOLO RMSE (px) | YOLO Jitter σ (px) | Pure Vision RMSE (px) | Pure Vision Jitter σ (px) | SCNN RMSE (px) | SCNN Jitter σ (px) |
+|---------|---------------|-------------------|----------------------|--------------------------|---------------|-------------------|
+| Clear   | 16.8          | 0.00              | 10.7                 | 1.44                     | 17.9          | 0.00              |
+| Rain    | 16.6          | 0.16              | 14.2                 | 3.04                     | 17.1          | 0.32              |
+| Fog     | 18.4          | 0.16              | 17.8                 | 2.72                     | 18.6          | 0.00              |
+| Night   | 16.8          | 0.16              | 11.0                 | 11.20                    | 17.9          | 0.32              |
+
+- **RMSE (px)** = `err_mean × 1600` — lateral error from ground-truth lane center
+- **Jitter σ (px)** = `center_diff_std × 1600` — std of frame-to-frame center jump (lower = more stable)
+
+**Key findings:**
+- Pure Vision has the lowest RMSE in Clear (10.7 px) and Night (11.0 px) but extremely high night jitter (11.20 px) due to right-edge instability
+- SCNN is the most stable overall — jitter σ ≤ 0.32 px across all conditions
+- YOLO is the most consistent across weather — RMSE varies only 1.8 px across all conditions
+
+### Experiment 2 — Controller Performance
+
+**Setup**: CARLA Town01, Tesla Model 3, Pure Pursuit (throttle=0.3), hysteresis ON, 3 repeats per condition (36 trials total).
+
+All 3 methods achieved **0% off-lane rate** across all trials.
+
+![eval_controller](./analysis/results/controller/summary/eval_controller.png)
+
+![cte_trajectory](./analysis/results/controller/trajectories/cte_trajectory.png)
+
+| Weather | YOLO CTE RMSE (cm) | YOLO Steer Jitter (%) | Pure Vision CTE RMSE (cm) | Pure Vision Steer Jitter (%) | SCNN CTE RMSE (cm) | SCNN Steer Jitter (%) |
+|---------|-------------------|-----------------------|--------------------------|-----------------------------|--------------------|----------------------|
+| Clear   | 1.30              | 1.41                  | 3.41                     | 0.74                        | 2.44               | 0.52                 |
+| Rain    | 2.19              | 1.09                  | 3.01                     | 2.07                        | 1.63               | 0.58                 |
+| Fog     | 1.90              | 0.83                  | 1.72                     | 1.52                        | 1.69               | 0.26                 |
+| Night   | 1.97              | 0.79                  | 3.97                     | 4.81                        | 1.37               | 0.59                 |
+
+- **CTE RMSE (cm)** = `cte_rmse_mean × 100` — cross-track error from GT node
+- **Steer Jitter (%)** = `steer_jitter_mean × 100` — std of steering command changes (lower = smoother)
+
+**Key findings:**
+- YOLO achieves the best CTE in Clear (1.30 cm) but highest steer jitter in Clear (1.41%)
+- SCNN achieves the best CTE in Night (1.37 cm) and Rain (1.63 cm) with consistently low steer jitter (≤ 0.59%)
+- Pure Vision has the highest night CTE (3.97 cm) and steer jitter (4.81%) — caused by right-edge instability under low light
+- Fog is the most balanced condition — all 3 methods within 0.18 cm CTE of each other
 
