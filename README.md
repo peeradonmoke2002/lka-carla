@@ -388,6 +388,10 @@ python main_landet.py --config configs/lane_detection/scnn/resnet18_lka.py --tes
 
 For the step to find Lane center from SCNN output pls visit [scnn_process.ipynb](./training&process/scnn_process.ipynb)
 
+| Clear | Fog | Night | Rain |
+|---|---|---|---|
+| ![scnn_clear](./Images/scnn_result_clear.png) | ![scnn_fog](./Images/scnn_result_fog.png) | ![scnn_night](./Images/scnn_result_night.png) | ![scnn_rain](./Images/scnn_result_rain.png) |
+
 
 ### How to find Lane center from All Perception Methods
 
