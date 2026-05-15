@@ -128,7 +128,15 @@ FRA626 Machine Vision for Smart Factory
 
 ## SCNN (Spatial CNN)
 
-**What is SCNN?** SCNN ส่ง Message ผ่าน Slice ของ Feature Map ใน 4 ทิศทาง (Down, Up, Right, Left) ทำให้ Pixel ที่อยู่ในเลนเดียวกันแต่ห่างกันสามารถแชร์ข้อมูลกันได้ภายใน Layer เดียวกัน ต่างจาก CNN ทั่วไปที่แต่ละ Pixel รับข้อมูลได้เฉพาะ Patch เล็กๆ รอบตัวมันเท่านั้น
+**What is SCNN?**
+
+CNN ทั่วไปมีข้อจำกัดคือ แต่ละ Pixel รับข้อมูลได้เฉพาะ Local Patch เล็กๆ รอบตัวมันเท่านั้น ซึ่งไม่เพียงพอสำหรับการตรวจจับเส้นเลนที่มีลักษณะเป็นเส้นยาว ต่อเนื่องตลอดภาพ (Long-range structural dependency)
+
+SCNN แก้ปัญหานี้ด้วย **Spatial Message Passing** โดยแทนที่จะส่งข้อมูลผ่าน Layer ลึกๆ ใน CNN ปกติ SCNN ส่ง Message ระหว่าง Slice ของ Feature Map ใน **4 ทิศทาง** ได้แก่ Down (D), Up (U), Right (R), Left (L) ทำให้ Pixel ที่อยู่ในเลนเดียวกันแต่อยู่ห่างกันสามารถแชร์ข้อมูลกันได้โดยตรง [5]
+
+![scnn_explain](./Images/scnn_explain.png)
+
+ภาพด้านบนเปรียบเทียบ (a) วิธี CRF/MRF แบบดั้งเดิมที่ต้อง Iterate หลายรอบ กับ (b) SCNN ที่ผ่าน Feature Map ใน 4 ทิศทาง (SCNN_D → SCNN_U → SCNN_R → SCNN_L) เพียงครั้งเดียวก่อน Predict ทำให้คำนวณได้เร็วกว่าและยังคง Spatial Continuity ของเส้นเลนได้ดี
 
 **Architecture:** ResNet-18 backbone + SpatialConv (pytorch-auto-drive)
 
@@ -140,7 +148,7 @@ FRA626 Machine Vision for Smart Factory
 |---|---|---|
 | epochs | 100 | Training rounds |
 | Input size | 288 × 800 | H × W |
-| batch | 32 | Images per step |
+| batch | 8 | Images per step |
 | optimizer | SGD | lr=0.01, momentum=0.9 |
 | pretrained | True | ResNet-18 from ImageNet |
 | NUM_CLASSES | 3 | bg, left_marking, right_edge |
@@ -151,35 +159,68 @@ FRA626 Machine Vision for Smart Factory
 
 ![find_lane_center](./Images/find_lane_center.png)
 
-**Step 1 — Fit line ด้วย Least Squares สำหรับแต่ละฝั่ง**
-
-$$[a, b] = \arg\min_{a,b} \sum_i \left( x_i - (a \cdot y_i + b) \right)^2$$
+โดยเริ่มจาก Fit line ด้วย Least Squares สำหรับแต่ละฝั่ง
 
 $$c_x^L = a^L \cdot y_{ref} + b^L, \quad c_x^R = a^R \cdot y_{ref} + b^R$$
 
-**Step 2 — คำนวณ Normalized Lane Center**
+โดยคำนวณ coefficients โดยใช้ least squares:
+
+$$[a, b] = \arg\min_{a,\, b} \sum_i \left( x_i - (a \cdot y_i + b) \right)^2$$
+
+โดย:
+
+- $x_i$ : ตำแหน่งแนวนอน
+- $y_i$ : ตำแหน่งแนวตั้ง
+- $a$ : ความชันของเส้นตรง
+- $b$ : จุดตัดแกน x (x เมื่อ y = 0)
+
+และคำนวณ Normalized Lane Center
 
 $$\text{center} = \frac{c_x^L + c_x^R}{2W} \in [0, 1]$$
 
 - center = 0.5 หมายถึงรถอยู่กึ่งกลางเลนพอดี
-- W = ความกว้างภาพ (1600 px)
+- $W$ : ความกว้างภาพ (1600 px)
+- $c_x^L, c_x^R$ : จุดกึ่งกลาง x ของ left marking และ right marking
 
 ## Pure Pursuit Controller
 
-| Symbol | Value | Unit | Description |
-|---|---|---|---|
-| k | 2.4 | — | Lookahead gain (ld_velocity_ratio) |
-| L | 3.0046 | m | Wheel base |
-| W_lane | 3.5 | m | Lane width |
-| δ_max | 1.2217 | rad | Maximum steering angle |
-| throttle | 0.3 | — | Constant throttle |
+Pure Pursuit เป็น Path-Tracking Algorithm ที่บังคับรถไปยัง Lookahead Point บน Lane Center ที่ระยะ $l_d$ ข้างหน้า โดยใช้ค่า Normalized Lane Center จาก Perception Node แปลงเป็น Lateral Error แล้วคำนวณมุมเลี้ยวตามลำดับขั้นดังนี้
 
-**สูตรคำนวณ:**
+**Step 1: Lateral error** — แปลง Normalized Lane Center เป็น Lateral Error (เมตร)
 
 $$e = (c_{norm} - 0.5) \times W_{lane}$$
+
+โดย:
+
+- $c_{norm}$ : Normalized Lane Center จาก Perception Node $\in [0, 1]$
+- $W_{lane}$ : ความกว้างเลน (3.5 m)
+- $e > 0$ : รถอยู่ทางขวาของเลน, $e < 0$ : รถอยู่ทางซ้าย
+
+**Step 2: Curvature (Pure Pursuit)** — คำนวณความโค้งของ Arc ที่จะพาหัวรถไปยัง Lookahead Point
+
 $$\kappa = \frac{2e}{l_d^2}, \quad l_d = k \cdot v$$
+
+โดย:
+
+- $l_d$ : Lookahead Distance (m) แปรตามความเร็ว
+- $k$ : Lookahead gain = 2.4
+- $v$ : ความเร็วรถปัจจุบัน (m/s)
+
+**Step 3: Steering angle** — แปลง Curvature เป็นมุมเลี้ยว
+
 $$\delta = \arctan(L \cdot \kappa)$$
+
+โดย:
+
+- $L$ : Wheel base = 3.0046 m (Tesla Model 3)
+
+**Step 4: Normalized steering command** — Clip มุมเลี้ยวให้อยู่ในช่วงที่รถรับได้
+
 $$\delta_{norm} = \text{clip}\left(\frac{\delta}{\delta_{max}}, -1, 1\right)$$
+
+โดย:
+
+- $\delta_{max}$ : มุมเลี้ยวสูงสุด = 1.2217 rad (~70°)
 
 ## Hysteresis Filter
 
@@ -330,6 +371,8 @@ $$\text{Max Steer Jitter} = \max(|\delta_t - \delta_{t-1}|) \times 100 \text{ (\
 3. Q. Zheng, R. Yang, and Z. Zhou, "pytorch-auto-drive: A unified framework for lane detection," 2021. Available: https://github.com/voldemortX/pytorch-auto-drive
 
 4. MathWorks, "Pure Pursuit Controller," *Navigation Toolbox Documentation*. Available: https://www.mathworks.com/help/nav/ug/pure-pursuit-controller.html
+
+5. X. Pan, J. Shi, P. Luo, X. Wang, and X. Tang, "Spatial As Deep: Spatial CNN for Traffic Scene Understanding," in *Proc. AAAI Conference on Artificial Intelligence (AAAI-18)*, 2018. Available: https://doi.org/10.48550/arXiv.1712.07080
 
 ---
 
