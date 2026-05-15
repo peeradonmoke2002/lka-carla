@@ -25,6 +25,7 @@ In this Project have Develop a lane detection pipeline using YOLO and Pure Visio
 - [Results](#results)
   - [Experiment 1 — Perception Performance](#experiment-1--perception-performance-1)
   - [Experiment 2 — Controller Performance](#experiment-2--controller-performance-1)
+- [References](#references)
 
 ## Install
 
@@ -514,4 +515,14 @@ All 3 methods achieved **0% off-lane rate** across all trials.
 - SCNN achieves the best CTE in Night (1.37 cm) and Rain (1.63 cm) with consistently low steer jitter (≤ 0.59%)
 - Pure Vision has the highest night CTE (3.97 cm) and steer jitter (4.81%) — caused by right-edge instability under low light
 - Fog is the most balanced condition — all 3 methods within 0.18 cm CTE of each other
+
+## References
+
+1. A. Dosovitskiy, G. Ros, F. Codevilla, A. Lopez, and V. Koltun, "CARLA: An Open Urban Driving Simulator," in *Proc. Conference on Robot Learning (CoRL)*, 2017. [Online]. Available: [https://doi.org/10.48550/arXiv.1712.06080](https://doi.org/10.48550/arXiv.1712.06080)
+
+2. G. Jocher, A. Chaurasia, and J. Qiu, "Ultralytics YOLO," 2023. [Online]. Available: [https://github.com/ultralytics/ultralytics](https://github.com/ultralytics/ultralytics)
+
+3. Q. Zheng, R. Yang, and Z. Zhou, "pytorch-auto-drive: A unified framework for lane detection," 2021. [Online]. Available: [https://github.com/voldemortX/pytorch-auto-drive](https://github.com/voldemortX/pytorch-auto-drive)
+
+4. MathWorks, "Pure Pursuit Controller," *Navigation Toolbox Documentation*, [Online]. Available: [https://www.mathworks.com/help/nav/ug/pure-pursuit-controller.html](https://www.mathworks.com/help/nav/ug/pure-pursuit-controller.html)
 
