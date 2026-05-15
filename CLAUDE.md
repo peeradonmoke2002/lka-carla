@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-## lka-carla-yolo
+## lka-carla
 
 Vision-Based Lane Keeping Assist (LKA) using multiple detection methods on CARLA Simulator. KMUTT FIBO — Machine Vision course, student ID 67340700403.
 
