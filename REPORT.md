@@ -102,7 +102,7 @@ FRA626 Machine Vision for Smart Factory
 
 | Clear | Fog | Night | Rain |
 |---|---|---|---|
-| ![yolo_clear](./Images/clear.png) | ![yolo_fog](./Images/fog.png) | ![yolo_night](./Images/night.png) | ![yolo_rain](./Images/rain.png) |
+| ![yolo_clear](./Images/yolo_result_clear.png) | ![yolo_fog](./Images/yolo_result_fog.png) | ![yolo_night](./Images/yolo_result_night.png) | ![yolo_rain](./Images/yolo_result_rain.png) |
 
 ## Pure Vision (OpenCV)
 
@@ -119,6 +119,10 @@ FRA626 Machine Vision for Smart Factory
 | Fog | [10, 5, 180] | [40, 120, 255] | (20, 60) |
 | Night | [10, 150, 30] | [40, 255, 255] | (20, 60) |
 | Rain | [15, 25, 150] | [35, 255, 255] | (20, 60) |
+
+| Clear | Fog | Night | Rain |
+|---|---|---|---|
+| ![pv_clear](./Images/opencv_result_clear.png) | ![pv_fog](./Images/opencv_result_fog.png) | ![pv_night](./Images/opencv_result_night.png) | ![pv_rain](./Images/opencv_result_rain.png) |
 
 ## SCNN (Spatial CNN)
 

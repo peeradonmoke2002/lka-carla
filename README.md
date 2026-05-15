@@ -274,6 +274,10 @@ lka.yolo26/
 ### How to Process YOLO output
 For the step to find Lane center from YOLO output pls visit [yolo_process.ipynb](./training&process/yolo_process.ipynb)
 
+| Clear | Fog | Night | Rain |
+|---|---|---|---|
+| ![yolo_clear](./Images/yolo_result_clear.png) | ![yolo_fog](./Images/yolo_result_fog.png) | ![yolo_night](./Images/yolo_result_night.png) | ![yolo_rain](./Images/yolo_result_rain.png) |
+
 
 ## Pure Vision (OpenCV)
 ### How to Process Pure Vision output
@@ -297,6 +301,10 @@ The Pure Vision pipeline processes the front camera image using classical OpenCV
 Both fitted lines are evaluated at `y_ref` to get `lx` and `rx`, then the lane center is computed as `(lx + rx) / (2W)`.
 
 For the step to find Lane center from Pure Vision output pls visit [pure_vision_process.ipynb](./training&process/pure_vision_process.ipynb)
+
+| Clear | Fog | Night | Rain |
+|---|---|---|---|
+| ![pv_clear](./Images/opencv_result_clear.png) | ![pv_fog](./Images/opencv_result_fog.png) | ![pv_night](./Images/opencv_result_night.png) | ![pv_rain](./Images/opencv_result_rain.png) |
 
 
 ## SCNN
