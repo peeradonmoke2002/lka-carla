@@ -1,5 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 
-# Tell GitHub Linguist to ignore notebooks (so Python/other langs show correctly)
+# .gitattributes
 *.ipynb linguist-vendored
