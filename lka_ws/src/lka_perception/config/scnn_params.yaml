@@ -1,6 +1,6 @@
 /**:
   ros__parameters:
-    weights:  "/home/peeradon/lka-carla-yolo/pytorch-auto-drive/checkpoints/resnet18_scnn_lka/model.pt"
+    weights:  /home/peeradon/lka-carla-yolo/models/scnn.pt
     input_w:  800                  # inference resize width
     input_h:  288                  # inference resize height
 
